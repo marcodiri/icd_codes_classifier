@@ -1,13 +1,5 @@
 from itertools import accumulate
 from math import copysign
-from abc import ABC, abstractmethod
-from configs import *
-
-
-class Kernel(ABC):
-    @abstractmethod
-    def get_kernel(self, x1, x2):
-        pass
 
 
 class VotedPerceptron:
@@ -44,7 +36,7 @@ class VotedPerceptron:
             # computing the prediction is the slow part.
             # It does O(n_examples * k^2) kernel calculations
             # with k number of mistakes made during the training
-            prediction = sum(ml * self.kernel.get_kernel(me, x)
+            prediction = sum(ml * self.kernel.get_kernel(me.lower(), x.lower())
                              for me, ml
                              in zip(self.mistaken_examples, self.mistaken_labels)
                              )
@@ -65,7 +57,7 @@ class VotedPerceptron:
         self.weights.append(self.current_weight)
 
     def predict(self, x):
-        pv_pre_activations = accumulate(yi * self.kernel.get_kernel(xi, x)
+        pv_pre_activations = accumulate(yi * self.kernel.get_kernel(xi.lower(), x.lower())
                                         for yi, xi
                                         in zip(self.mistaken_labels,
                                                self.mistaken_examples))

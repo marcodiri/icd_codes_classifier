@@ -12,6 +12,7 @@ class MulticlassClassifier:
         self.args = args
 
         self.kernel = kernel
+        self.binary_classifier = BinaryClassifier
         self.binary_classifiers = {y:
                                    BinaryClassifier(self.kernel)
                                    for y in possible_labels}
@@ -53,7 +54,10 @@ class MulticlassClassifier:
         save_dir = MODEL_SAVE_DIR
         touch_dir(save_dir)
 
+        print("Starting training")
+        LOGGER.info("Starting training")
         start = default_timer()
+
         if self.args.process_count is not None and self.args.process_count > 1:
 
             with Pool(processes=self.args.process_count) as pool:
@@ -89,19 +93,31 @@ class MulticlassClassifier:
         LOGGER.info("Per class error distribution:")
         LOGGER.info("{}".format(bc_vector_counts))
         LOGGER.info("Total errors: {}".format(tot_errors))
-        print("Per class error distribution:")
-        print(bc_vector_counts)
         print("Total errors: {}".format(tot_errors))
+
+        # using more processes generates larger VotedPerceptron objects
+        # in terms of memory usage, so recreate them with same
+        # attributes to compress the MulticlassClassifier
+        if self.args.process_count > 1:
+            print("Compressing MulticlassClassifier")
+            for _, __ in self.binary_classifiers.items():
+                temp = self.binary_classifier(self.kernel)
+                temp.mistaken_examples = __.mistaken_examples
+                temp.mistaken_labels = __.mistaken_labels
+                temp.weights = __.weights
+                # temp.current_weight = __.current_weight  # not necessary
+                self.binary_classifiers[_] = temp
 
         # save trained MulticlassClassifier
         print('Saving MulticlassClassifier')
-        training_dir = TRAINING_SAVE_DIR + "trained_classifiers/"
+        training_dir = TRAINING_SAVE_DIR
         touch_dir(training_dir)
         save_filepath = training_dir+'/{}_{}_{}_epochs{}_errors{}.pk'\
             .format(self.kernel.__class__.__name__, self.args.k, self.args.m, self.args.epochs, tot_errors)
+
         with open(save_filepath, 'wb') as multicc_file:
             pickle.dump(self, multicc_file)
-        LOGGER.info("Created save file in {}".format(save_filepath))
+        LOGGER.info("Created save file in {}\n".format(save_filepath))
 
     def predict(self, input_vector):
         # Note: not multiprocess because the overhead of having

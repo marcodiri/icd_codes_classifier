@@ -1,2 +1,2 @@
-from .votedperceptron import VotedPerceptron, Kernel
+from .votedperceptron import VotedPerceptron
 from .multiclassclassifier import MulticlassClassifier

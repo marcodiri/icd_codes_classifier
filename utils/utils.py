@@ -1,5 +1,6 @@
 import logging
 import random
+import sys
 from math import floor
 
 from configs import *
@@ -28,10 +29,11 @@ def print_progress_bar (iteration, total, prefix='', suffix='', decimals=1, leng
         print()
 
 
-def knuth_shuffle(tup):
+def knuth_shuffle(tup, seed=None):
     """
     Shuffles locally (i.e. the lists will be modified) the passed lists
     with a Knuth shuffle. The same permutation will occur on every list.
+    Lists in the tuple must have the same length
 
     If you want to pass only one list create a tuple like so:
 
@@ -45,8 +47,14 @@ def knuth_shuffle(tup):
     to be modified.
 
     :param tup: a tuple of lists to be shuffled
+    :param seed: a seed to generate repeatable permutations
+    :return: the input tuple and the seed used
     """
-    # lists in the tuple must have the same length
+
+    # create a seed
+    if seed is None:
+        seed = random.randrange(sys.maxsize)
+    random.seed(seed)
     start_index = len(tup[0]) - 1
     while start_index > 0:
         random_index = random.randint(0, start_index)
@@ -55,7 +63,7 @@ def knuth_shuffle(tup):
             l[start_index] = l[random_index]
             l[random_index] = temp
         start_index -= 1
-    return tup
+    return tup, seed
 
 
 # split mismatch vectors list

@@ -1,7 +1,4 @@
-import sys
-sys.path.append('D:\\Users\\Marco\\Google Drive\\Uni\\Tesi\\mismatch_string_kernel')  # needed to run script from console
 import argparse
-from math import floor
 from multiprocessing import Pool
 from timeit import default_timer
 
@@ -14,13 +11,13 @@ class Trainer:
     def __init__(self, args):
         self.args = args
         self.MISMATCH_KERNEL = MismatchKernel(ALPHABET, self.args.k, self.args.m)
-        self.mv_dir = TRAINING_SAVE_DIR + "mismatch_vectors/"
+        self.mv_dir = MODEL_SAVE_DIR + "mismatch_vectors/"
         mv_file = self.mv_dir + "mismatch_vectors_{}_{}.pk".format(self.args.k, self.args.m)
         if os.path.exists(mv_file):
             with open(mv_file, 'rb') as mismatch_vectors_file:
                 self.MISMATCH_KERNEL.MISMATCH_VECTORS = pickle.load(mismatch_vectors_file)
 
-        self.km_dir = TRAINING_SAVE_DIR + "kernel_matrices/"
+        self.km_dir = MODEL_SAVE_DIR + "kernel_matrices/"
         km_file = self.km_dir + "kernel_matrix_{}_{}.pk".format(self.args.k, self.args.m)
         if os.path.exists(km_file):
             with open(km_file, 'rb') as kernel_matrix_file:
@@ -39,7 +36,7 @@ class Trainer:
             if len(t) < self.args.k:
                 t = t.ljust(self.args.k)
             if t not in vectors_dict:
-                t_norm, mv = self.MISMATCH_KERNEL.mismatch_tree.vectorize(t)
+                t_norm, mv = self.MISMATCH_KERNEL.mismatch_tree.vectorize(t.lower())
                 vectors_dict[t_norm] = mv
 
             # Update Progress Bar
@@ -52,12 +49,17 @@ class Trainer:
         if os.path.exists(self.mv_dir+'mismatch_vectors_{}_{}.pk'
                 .format(self.args.k, self.args.m)):
             print("Mismatch_vectors file found, proceeding to next stage")
+            LOGGER.info("Mismatch_vectors file found, proceeding to next stage")
             return
 
-        print("Starting ({}-{})-mismatch-vectors calculation".format(self.args.k, self.args.m))
+        processes = self.args.process_count
+
+        print("Starting ({}-{})-mismatch-vectors calculation with {} processes"
+              .format(self.args.k, self.args.m, processes))
+        LOGGER.info("Starting ({}-{})-mismatch-vectors calculation with {} processes"
+                    .format(self.args.k, self.args.m, processes))
         start = default_timer()
 
-        processes = self.args.process_count
         vectors_dict = {}
 
         if processes > 1:
@@ -98,6 +100,7 @@ class Trainer:
 
         end = default_timer()
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
+        LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
     def _compute_row(self, pid, chunk, keys, kernel):
         rows = {}
@@ -110,7 +113,7 @@ class Trainer:
             j = keys.index(current_key)
             while j < len(keys):
                 other_key = keys[j]
-                rows[current_key][other_key] = kernel.get_kernel(other_key, current_key)
+                rows[current_key][other_key] = kernel.get_kernel(other_key.lower(), current_key.lower())
                 j += 1
 
             # Update Progress Bar
@@ -123,9 +126,13 @@ class Trainer:
         if os.path.exists(self.km_dir+'kernel_matrix_{}_{}.pk'
                 .format(self.args.k, self.args.m)):
             print("Kernel_matrix file found, proceeding to next stage")
+            LOGGER.info("Kernel_matrix file found, proceeding to next stage")
             return
 
-        print("Starting kernel matrix calculation")
+        print("Starting ({}-{})-kernel-matrix calculation with {} processes"
+              .format(self.args.k, self.args.m, processes))
+        LOGGER.info("Starting ({}-{})-kernel-matrix calculation with {} processes"
+                    .format(self.args.k, self.args.m, processes))
         start = default_timer()
 
         matrix = {}
@@ -141,7 +148,7 @@ class Trainer:
                 rows_chunks = [pool.apply_async(func=self._compute_row,
                                                 args=(pid, c, keys, self.MISMATCH_KERNEL)
                                                 )
-                               for pid, c in enumerate(chunk(knuth_shuffle((keys.copy(),))[0], processes))
+                               for pid, c in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
                                ]
 
                 for k in rows_chunks:
@@ -157,7 +164,7 @@ class Trainer:
                     current_key = keys[j]
                     if k not in matrix:
                         matrix[k] = {}
-                    matrix[k][current_key] = self.MISMATCH_KERNEL.get_kernel(k, current_key)
+                    matrix[k][current_key] = self.MISMATCH_KERNEL.get_kernel(k.lower(), current_key.lower())
                     j += 1
 
                 # Update Progress Bar
@@ -174,33 +181,41 @@ class Trainer:
 
         end = default_timer()
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
+        LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
-    def train(self):
+    def train(self, seeds=None):
+        """
+        :param seeds: a list of seeds to repeat dataset random permutations
+        """
+        if seeds is None:
+            seeds = [None for _ in range(self.args.epochs-1)]
+        if not isinstance(seeds, list):
+            seeds = [seeds]
+        if len(seeds) < self.args.epochs-1:
+            raise RuntimeError("Given less seeds than epochs-1")
+
         def expand_dataset(lst):
             """
             :param lst: the list to be shuffled
             :return: a copy of lst with shuffled elements
             """
-            expanded = [l.copy() for l in lst]
+            print("Expanding dataset for {} epochs".format(self.args.epochs))
+            LOGGER.info("Expanding dataset for {} epochs".format(self.args.epochs))
+            expanded = [_.copy() for _ in lst]
             for e in range(1, self.args.epochs):
-                shuffled = knuth_shuffle([l.copy() for l in lst])
+                shuffled, seed = knuth_shuffle([_.copy() for _ in lst], seeds[e-1])
+                print("Shuffle {} with seed {}".format(e, seed))
+                LOGGER.info("Shuffle {} with seed {}".format(e, seed))
                 # attach shuffled lists to original lists
                 for i in range(len(lst)):
                     expanded[i] += shuffled[i]
             return expanded
 
-        print("Starting training for {} epochs".format(self.args.epochs))
-        start = default_timer()
-
-        # WARNING: for some reason using more processes produces a much bigger file
         dataset = expand_dataset([list(TRAINING_LIST), list(LABELS)])
 
         # create instance of MulticlassClassifier
         multicc = MulticlassClassifier(POSSIBLE_LABELS, VotedPerceptron, self.args, self.MISMATCH_KERNEL)
         multicc.train(np.array(dataset[0]), np.array(dataset[1]))
-
-        end = default_timer()
-        print("Finished training {} seconds".format(end-start))
 
 
 def train(args):
@@ -243,14 +258,24 @@ def train(args):
     trainer = Trainer(args)
     trainer.save_mismatch_vectors()
     trainer.kernel_matrix()
-    trainer.train()
+    trainer.train(args.seeds)
     pass
 
 
 def predict(args):
-    with open(args.filepath, 'rb') as file:
-        mcc = pickle.load(file)
-        print("K={} {}epochs guessed {}\n".format(mcc.args.k, mcc.args.epochs, mcc.predict(args.input)))
+    def _predict(filename):
+        with open(filename, 'rb') as file:
+            mcc = pickle.load(file)
+            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input)))
+
+    if args.filepath == "all":
+        trained_classifiers_files = [f for f in os.listdir(TRAINING_SAVE_DIR)
+                                     if os.path.isfile(os.path.join(TRAINING_SAVE_DIR, f))
+                                     and ".pk" in f]
+        for _ in trained_classifiers_files:
+            _predict(TRAINING_SAVE_DIR+_)
+    else:
+        _predict(args.filepath)
 
 
 def main():
@@ -275,6 +300,12 @@ def main():
                               choices=np.array(range(1, 11)),
                               metavar='{1, 2, ..., 10}',
                               default=1)
+    parser_train.add_argument('-s', '--seeds',
+                              help='number of times the training set will be repeated.',
+                              type=int,
+                              nargs='+',
+                              metavar='[int, int, ...]',
+                              default=None)
     parser_train.add_argument('-k',
                               help='length of k-mers for the (k-m)-mismatch vector.',
                               type=int,
@@ -308,33 +339,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # with open("save/kernel_matrices/kernel_matrix_2_1.pk", "rb") as fsd:
-    #     asd = pickle.load(fsd)
-    #     pass
     main()
-    # from argparse import Namespace
-    # args = Namespace()
-    # args.input = "diarrea"
-    # args.filepath = TRAINING_SAVE_DIR+"trained_classifiers/MismatchKernel_2_1_epochs1_errors8602.pk"
-    # predict(args)
-    # args.filepath = TRAINING_SAVE_DIR+"trained_classifiers/MismatchKernel_3_1_epochs1_errors8369.pk"
-    # predict(args)
-    # args.filepath = TRAINING_SAVE_DIR+"trained_classifiers/MismatchKernel_3_1_epochs3_errors16099.pk"
-    # predict(args)
-    # args.filepath = TRAINING_SAVE_DIR+"trained_classifiers/MismatchKernel_4_1_epochs1_errors14621.pk"
-    # predict(args)
-    # start = default_timer()
-    # # save_mismatch_vectors()
-    # # kernel_matrix()
-    # # kernel_matrix(1)  # reduce file size
-    # # train()
-    # predict("scomp. cadrico cong")  # solo 4
-    # # predict("diarrea")  # 3 2epoche a 4
-    # # predict("grave bradiaritmia")  # solo 3 3epoche e 4
-    # # predict("scopeso cadrico")  # solo 2
-    # predict("fratt femore")  # tutti tranne 4
-    # # predict("cad")  # solo 3 3epoche a 4
-    # # predict("ins ren")  # solo 3 fino a 3epoche
-    # end = default_timer()
-    # print("Time {}".format(end-start))
 
