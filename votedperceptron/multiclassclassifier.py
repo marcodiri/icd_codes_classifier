@@ -50,20 +50,15 @@ class MulticlassClassifier:
                 if len(v) < self.args.k:
                     training_list[i] = v.ljust(self.args.k)
 
-        # create save directory
-        save_dir = MODEL_SAVE_DIR
-        touch_dir(save_dir)
-
         print("Starting training")
         LOGGER.info("Starting training")
         start = default_timer()
 
         if self.args.process_count is not None and self.args.process_count > 1:
-
             with Pool(processes=self.args.process_count) as pool:
                 chunks = [pool.apply_async(func=self._chunk_binary_classifiers_train,
-                                           args=(pid, chunk, training_list, labels))
-                          for pid, chunk in enumerate(chunk(self.binary_classifiers, self.args.process_count))]
+                                           args=(pid, chk, training_list, labels))
+                          for pid, chk in enumerate(chunk(self.binary_classifiers, self.args.process_count))]
 
                 # retrieve the trained binary classifiers back from the process pool and
                 # replace the untrained instances in self.binary_classifiers with

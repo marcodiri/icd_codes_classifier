@@ -11,33 +11,33 @@ class Trainer:
     def __init__(self, args):
         self.args = args
         self.MISMATCH_KERNEL = MismatchKernel(ALPHABET, self.args.k, self.args.m)
-        self.mv_dir = MODEL_SAVE_DIR + "mismatch_vectors/"
+        self.mv_dir = VECTORS_SAVE_DIR
         mv_file = self.mv_dir + "mismatch_vectors_{}_{}.pk".format(self.args.k, self.args.m)
         if os.path.exists(mv_file):
             with open(mv_file, 'rb') as mismatch_vectors_file:
                 self.MISMATCH_KERNEL.MISMATCH_VECTORS = pickle.load(mismatch_vectors_file)
 
-        self.km_dir = MODEL_SAVE_DIR + "kernel_matrices/"
+        self.km_dir = KERNELS_SAVE_DIR
         km_file = self.km_dir + "kernel_matrix_{}_{}.pk".format(self.args.k, self.args.m)
         if os.path.exists(km_file):
             with open(km_file, 'rb') as kernel_matrix_file:
                 self.MISMATCH_KERNEL.KERNEL_MATRIX = pickle.load(kernel_matrix_file)
 
-    def _chunk_mismatch_vectors(self, pid, chunk):
-        size = len(chunk)-1
+    def _chunk_mismatch_vectors(self, pid, chk):
+        size = len(chk)-1
         vectors_dict = {}
 
         # Initial call to print 0% progress
         print_progress_bar(0, size,
                            prefix='#{} Progress:'.format(pid), suffix='Complete', length=50)
 
-        for n, (t, l) in enumerate(chunk):
+        for n, ex in enumerate(chk):
             # add trailing spaces to all the examples shorter than K
-            if len(t) < self.args.k:
-                t = t.ljust(self.args.k)
-            if t not in vectors_dict:
-                t_norm, mv = self.MISMATCH_KERNEL.mismatch_tree.vectorize(t.lower())
-                vectors_dict[t_norm] = mv
+            if len(ex) < self.args.k:
+                ex = ex.ljust(self.args.k)
+            if ex not in vectors_dict:
+                ex_norm, mv = self.MISMATCH_KERNEL.mismatch_tree.vectorize(ex)
+                vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
             print_progress_bar(n, size,
@@ -63,21 +63,11 @@ class Trainer:
         vectors_dict = {}
 
         if processes > 1:
-            # split examples list
-            def chunk(lst):
-                elements_per_chunk = floor(len(lst)/processes)
-                for i in range(0, len(lst), elements_per_chunk):
-                    if i < elements_per_chunk*(processes-1):
-                        yield lst[i:i+elements_per_chunk]
-                    else:
-                        yield lst[i:]
-                        return
-
             with Pool(processes=processes) as pool:
                 chunks = [pool.apply_async(func=self._chunk_mismatch_vectors,
-                                           args=(pid, c)
+                                           args=(pid, chk)
                                            )
-                          for pid, c in enumerate(chunk(examples))
+                          for pid, chk in enumerate(chunk(TRAINING_LIST, processes))
                           ]
 
                 # merge chunks in one dict
@@ -102,18 +92,18 @@ class Trainer:
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
         LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
-    def _compute_row(self, pid, chunk, keys, kernel):
+    def _compute_row(self, pid, chk, keys, kernel):
         rows = {}
-        size = len(chunk)-1
+        size = len(chk)-1
         # Initial call to print 0% progress
         print_progress_bar(0, size,
                            prefix='Progress:', suffix='Complete', length=50)
-        for n, current_key in enumerate(chunk):
+        for n, current_key in enumerate(chk):
             rows[current_key] = {}
             j = keys.index(current_key)
             while j < len(keys):
                 other_key = keys[j]
-                rows[current_key][other_key] = kernel.get_kernel(other_key.lower(), current_key.lower())
+                rows[current_key][other_key] = kernel.get_kernel(other_key, current_key)
                 j += 1
 
             # Update Progress Bar
@@ -146,9 +136,9 @@ class Trainer:
             # same amount of work
             with Pool(processes=processes) as pool:
                 rows_chunks = [pool.apply_async(func=self._compute_row,
-                                                args=(pid, c, keys, self.MISMATCH_KERNEL)
+                                                args=(pid, chk, keys, self.MISMATCH_KERNEL)
                                                 )
-                               for pid, c in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
+                               for pid, chk in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
                                ]
 
                 for k in rows_chunks:
@@ -164,7 +154,7 @@ class Trainer:
                     current_key = keys[j]
                     if k not in matrix:
                         matrix[k] = {}
-                    matrix[k][current_key] = self.MISMATCH_KERNEL.get_kernel(k.lower(), current_key.lower())
+                    matrix[k][current_key] = self.MISMATCH_KERNEL.get_kernel(k, current_key)
                     j += 1
 
                 # Update Progress Bar
@@ -269,13 +259,20 @@ def predict(args):
             print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input)))
 
     if args.filepath == "all":
+        if not os.path.exists(TRAINING_SAVE_DIR):
+            raise RuntimeError("{} directory not found".format(TRAINING_SAVE_DIR))
         trained_classifiers_files = [f for f in os.listdir(TRAINING_SAVE_DIR)
                                      if os.path.isfile(os.path.join(TRAINING_SAVE_DIR, f))
                                      and ".pk" in f]
+        if not len(trained_classifiers_files):
+            raise RuntimeError("No training files found")
         for _ in trained_classifiers_files:
             _predict(TRAINING_SAVE_DIR+_)
     else:
-        _predict(args.filepath)
+        if os.path.exists(args.filepath):
+            _predict(args.filepath)
+        else:
+            raise RuntimeError("{} not found".format(args.filepath))
 
 
 def main():
