@@ -75,7 +75,7 @@ class Trainer:
                     vectors_dict.update(k.get())
 
         else:
-            vectors_dict = self._chunk_mismatch_vectors(0, examples)
+            vectors_dict = self._chunk_mismatch_vectors(0, TRAINING_LIST)
 
         # add the empty label to initialize the training with a zeros vector
         # which translates to an empty dictionary in DOK format
