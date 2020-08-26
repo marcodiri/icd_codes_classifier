@@ -1,5 +1,5 @@
 import argparse
-from multiprocessing import Pool
+from multiprocessing import Pool, Manager
 from timeit import default_timer
 
 from utils import *
@@ -23,15 +23,15 @@ class Trainer:
             with open(km_file, 'rb') as kernel_matrix_file:
                 self.MISMATCH_KERNEL.KERNEL_MATRIX = pickle.load(kernel_matrix_file)
 
-    def _chunk_mismatch_vectors(self, pid, chk):
-        size = len(chk)-1
+    def _chunk_mismatch_vectors(self, pid, progress_list, chk):
+        size = len(chk)
         vectors_dict = {}
 
         # Initial call to print 0% progress
-        print_progress_bar(0, size,
-                           prefix='#{} Progress:'.format(pid), suffix='Complete', length=50)
+        progress_list.insert(pid, [0, size])
+        print_progress_bar(progress_list)
 
-        for n, ex in enumerate(chk):
+        for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
             if len(ex) < self.args.k:
                 ex = ex.ljust(self.args.k)
@@ -40,8 +40,8 @@ class Trainer:
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
-            print_progress_bar(n, size,
-                               prefix='#{} Progress:'.format(pid), suffix='Complete', length=50)
+            progress_list[pid] = [n, size]
+            print_progress_bar(progress_list)
 
         return vectors_dict
 
@@ -63,9 +63,10 @@ class Trainer:
         vectors_dict = {}
 
         if processes > 1:
+            progress_list = Manager().list()
             with Pool(processes=processes) as pool:
                 chunks = [pool.apply_async(func=self._chunk_mismatch_vectors,
-                                           args=(pid, chk)
+                                           args=(pid, progress_list, chk)
                                            )
                           for pid, chk in enumerate(chunk(TRAINING_LIST, processes))
                           ]
@@ -75,7 +76,7 @@ class Trainer:
                     vectors_dict.update(k.get())
 
         else:
-            vectors_dict = self._chunk_mismatch_vectors(0, TRAINING_LIST)
+            vectors_dict = self._chunk_mismatch_vectors(0, [], TRAINING_LIST)
 
         # add the empty label to initialize the training with a zeros vector
         # which translates to an empty dictionary in DOK format
@@ -92,13 +93,15 @@ class Trainer:
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
         LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
-    def _compute_row(self, pid, chk, keys, kernel):
+    def _compute_row(self, pid, progress_list, chk, keys, kernel):
         rows = {}
-        size = len(chk)-1
+        size = len(chk)
+
         # Initial call to print 0% progress
-        print_progress_bar(0, size,
-                           prefix='Progress:', suffix='Complete', length=50)
-        for n, current_key in enumerate(chk):
+        progress_list.insert(pid, [0, size])
+        print_progress_bar(progress_list)
+
+        for n, current_key in enumerate(chk, start=1):
             rows[current_key] = {}
             j = keys.index(current_key)
             while j < len(keys):
@@ -107,8 +110,9 @@ class Trainer:
                 j += 1
 
             # Update Progress Bar
-            print_progress_bar(n, size,
-                               prefix='#{} Progress:'.format(pid), suffix='Complete', length=50)
+            progress_list[pid] = [n, size]
+            print_progress_bar(progress_list)
+
         return rows
 
     def kernel_matrix(self):
@@ -135,8 +139,9 @@ class Trainer:
             # before chunking so every process gets about the
             # same amount of work
             with Pool(processes=processes) as pool:
+                progress_list = Manager().list()
                 rows_chunks = [pool.apply_async(func=self._compute_row,
-                                                args=(pid, chk, keys, self.MISMATCH_KERNEL)
+                                                args=(pid, progress_list, chk, keys, self.MISMATCH_KERNEL)
                                                 )
                                for pid, chk in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
                                ]
@@ -144,11 +149,10 @@ class Trainer:
                 for k in rows_chunks:
                     matrix.update(k.get())
         else:
-            size = len(keys)-1
+            size = len(keys)
             # Initial call to print 0% progress
-            print_progress_bar(0, size,
-                               prefix='Progress:', suffix='Complete', length=50)
-            for i, k in enumerate(keys):
+            print_progress_bar([[0, size]], length=50)
+            for i, k in enumerate(keys, start=1):
                 j = i
                 while j < len(mv):
                     current_key = keys[j]
@@ -158,8 +162,7 @@ class Trainer:
                     j += 1
 
                 # Update Progress Bar
-                print_progress_bar(i, size,
-                                   prefix='Progress:', suffix='Complete', length=50)
+                print_progress_bar([[i, size]], length=50)
 
         self.MISMATCH_KERNEL.KERNEL_MATRIX = matrix
 

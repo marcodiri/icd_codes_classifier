@@ -7,7 +7,7 @@ from configs import *
 
 
 # Print iterations progress
-def print_progress_bar (iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█'):
+def print_progress_bar(iterations, prefix='', suffix='', decimals=1, length=35, fill='█'):
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -20,12 +20,24 @@ def print_progress_bar (iteration, total, prefix='', suffix='', decimals=1, leng
         fill        - Optional  : bar fill character (Str)
         printEnd    - Optional  : end character (e.g. "\r", "\r\n") (Str)
     """
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
-    filledLength = int(length * iteration // total)
-    bar = fill * filledLength + '-' * (length - filledLength)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end="")
+    bars = len(iterations)
+    length = int(length / bars)
+    output = ""
+    completed = 0
+    for n, (iteration, total) in enumerate(iterations):
+        percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+        filledLength = int(length * iteration // total)
+        bar = fill * filledLength + '-' * (length - filledLength)
+        output += f'#{n}{prefix} |{bar}| {percent}% {suffix}'
+        if n < bars-1:
+            output += "- "
+        if iteration != total:
+            continue
+        completed += 1
+
+    print(f"\r{output}", end="")
     # Print New Line on Complete
-    if iteration == total:
+    if bars == completed:
         print()
 
 
