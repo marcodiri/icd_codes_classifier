@@ -33,10 +33,11 @@ class Trainer:
 
         for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
+            ex = self.MISMATCH_KERNEL.mismatch_tree.normalize_input(ex)
             if len(ex) < self.args.k:
                 ex = ex.ljust(self.args.k)
             if ex not in vectors_dict:
-                ex_norm, mv = self.MISMATCH_KERNEL.mismatch_tree.vectorize(ex)
+                ex_norm, mv = self.MISMATCH_KERNEL.vectorize(ex)
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
@@ -259,7 +260,7 @@ def predict(args):
     def _predict(filename):
         with open(filename, 'rb') as file:
             mcc = pickle.load(file)
-            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input)))
+            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input, args.prediction_mode)))
 
     if args.filepath == "all":
         if not os.path.exists(TRAINING_SAVE_DIR):
@@ -326,6 +327,12 @@ def main():
     parser_test.add_argument('-i', '--input',
                              help='The input to predict.',
                              type=str
+                             )
+    parser_test.add_argument('-pm', '--prediction_mode',
+                             help='If voted or single vector prediction.',
+                             type=str,
+                             choices=["voted", "single"],
+                             default="voted"
                              )
     parser_test.add_argument('-f', '--filepath',
                              help='Training file to use to predict the input.',

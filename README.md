@@ -51,10 +51,12 @@ will be attached to the original dataset to form the 3 epochs.
 You can classify a string with a saved training file with the following parameters:
 
     predict
+    -pm, --prediction_mode ["single", "voted"]: voted or single vector prediction
+        default to "voted"
     -i, --input: the input string
     -f: the training file path or the keyword 'all' to predict with every classifier
         in the save folder
 
-Example to classify the string "fever" with every saved classifier:
+Example to classify the string "fever" with every saved classifier with single vector prediction:
 
-    python runner.py predict -i "fever" -f all
+    python runner.py predict -i "fever" -pm single -f all
