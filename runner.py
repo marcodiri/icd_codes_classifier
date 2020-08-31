@@ -349,7 +349,7 @@ def cross_validate(args):
 
         from sklearn import metrics
         result = {
-            "cm": metrics.confusion_matrix(y_true, y_pred, POSSIBLE_LABELS),
+            "cm": metrics.confusion_matrix(y_true, y_pred, labels=POSSIBLE_LABELS),
             "labels": POSSIBLE_LABELS,
             "y_pred": y_pred,
             "y_true": y_true
@@ -360,7 +360,7 @@ def cross_validate(args):
         with open(savedir+f"voted_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
             pickle.dump(result, res_f)
         info = f"Voted prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
-               f"accuracy: {accuracy}\n\n"
+               f"accuracy: {accuracy}\n"
         print(info)
         LOGGER.info(info)
 
