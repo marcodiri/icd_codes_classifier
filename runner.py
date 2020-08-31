@@ -1,11 +1,12 @@
 import argparse
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 from timeit import default_timer
 from sklearn.model_selection import StratifiedKFold
 
 from utils import *
-from votedperceptron import VotedPerceptron, MulticlassClassifier
 from mismatch_kernel import MismatchKernel
+from sklearn import svm
+import numpy as np
 
 
 class Trainer:
@@ -18,19 +19,12 @@ class Trainer:
             with open(mv_file, 'rb') as mismatch_vectors_file:
                 self.MISMATCH_KERNEL.MISMATCH_VECTORS = pickle.load(mismatch_vectors_file)
 
-        self.km_dir = KERNELS_SAVE_DIR
-        km_file = self.km_dir + "kernel_matrix_{}_{}.pk".format(self.args.k, self.args.m)
-        if os.path.exists(km_file):
-            with open(km_file, 'rb') as kernel_matrix_file:
-                self.MISMATCH_KERNEL.KERNEL_MATRIX = pickle.load(kernel_matrix_file)
-
-    def _chunk_mismatch_vectors(self, pid, progress_list, chk):
+    def _chunk_mismatch_vectors(self, pid, chk):
         size = len(chk)
         vectors_dict = {}
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
@@ -42,8 +36,7 @@ class Trainer:
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return vectors_dict
 
@@ -65,10 +58,9 @@ class Trainer:
         vectors_dict = {}
 
         if processes > 1:
-            progress_list = Manager().list()
             with Pool(processes=processes) as pool:
                 chunks = [pool.apply_async(func=self._chunk_mismatch_vectors,
-                                           args=(pid, progress_list, chk)
+                                           args=(pid, chk)
                                            )
                           for pid, chk in enumerate(chunk(TRAINING_LIST, processes))
                           ]
@@ -78,7 +70,7 @@ class Trainer:
                     vectors_dict.update(k.get())
 
         else:
-            vectors_dict = self._chunk_mismatch_vectors(0, [], TRAINING_LIST)
+            vectors_dict = self._chunk_mismatch_vectors(0, TRAINING_LIST)
 
         # add the empty label to initialize the training with a zeros vector
         # which translates to an empty dictionary in DOK format
@@ -95,13 +87,12 @@ class Trainer:
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
         LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
-    def _compute_row(self, pid, progress_list, chk, keys, kernel):
+    def _compute_row(self, pid, chk, keys, kernel):
         rows = {}
         size = len(chk)
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, current_key in enumerate(chk, start=1):
             rows[current_key] = {}
@@ -112,208 +103,92 @@ class Trainer:
                 j += 1
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return rows
 
-    def kernel_matrix(self):
-        processes = self.args.process_count
-        if os.path.exists(self.km_dir+'kernel_matrix_{}_{}.pk'
-                .format(self.args.k, self.args.m)):
-            print("Kernel_matrix file found, proceeding to next stage")
-            LOGGER.info("Kernel_matrix file found, proceeding to next stage")
-            return
 
-        print("Starting ({}-{})-kernel-matrix calculation with {} processes"
-              .format(self.args.k, self.args.m, processes))
-        LOGGER.info("Starting ({}-{})-kernel-matrix calculation with {} processes"
-                    .format(self.args.k, self.args.m, processes))
-        start = default_timer()
-
-        matrix = {}
-        mv = self.MISMATCH_KERNEL.MISMATCH_VECTORS
-        keys = list(mv.keys())
-        if processes > 1:
-            # each process computes a chunk of rows of the matrix.
-            # Since the keys towards the end of the list require
-            # much less calculation, the keys list is shuffled
-            # before chunking so every process gets about the
-            # same amount of work
-            with Pool(processes=processes) as pool:
-                progress_list = Manager().list()
-                rows_chunks = [pool.apply_async(func=self._compute_row,
-                                                args=(pid, progress_list, chk, keys, self.MISMATCH_KERNEL)
-                                                )
-                               for pid, chk in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
-                               ]
-
-                for k in rows_chunks:
-                    matrix.update(k.get())
-        else:
-            size = len(keys)
-            # Initial call to print 0% progress
-            print_progress_bar([[0, size]], length=50)
-            for i, k in enumerate(keys, start=1):
-                j = i
-                while j < len(mv):
-                    current_key = keys[j]
-                    if k not in matrix:
-                        matrix[k] = {}
-                    matrix[k][current_key] = self.MISMATCH_KERNEL.get_kernel(k, current_key)
-                    j += 1
-
-                # Update Progress Bar
-                print_progress_bar([[i, size]], length=50)
-
-        self.MISMATCH_KERNEL.KERNEL_MATRIX = matrix
-
-        touch_dir(self.km_dir)
-        with open(self.km_dir+'kernel_matrix_{}_{}.pk'
-                .format(self.args.k, self.args.m), 'wb')\
-                as km_file:
-            pickle.dump(matrix, km_file)
-
-        end = default_timer()
-        print("Finished mismatch vectors calculation in {} seconds".format(end-start))
-        LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
-
-    def train(self, seeds=None):
-        """
-        :param seeds: a list of seeds to repeat dataset random permutations
-        """
-        if seeds is None:
-            seeds = [None for _ in range(self.args.epochs-1)]
-        if not isinstance(seeds, list):
-            seeds = [seeds]
-        if len(seeds) < self.args.epochs-1:
-            raise RuntimeError("Given less seeds than epochs-1")
-
-        def expand_dataset(lst):
-            """
-            :param lst: the list to be shuffled
-            :return: a copy of lst with shuffled elements
-            """
-            print("Expanding dataset for {} epochs".format(self.args.epochs))
-            LOGGER.info("Expanding dataset for {} epochs".format(self.args.epochs))
-            expanded = [_.copy() for _ in lst]
-            for e in range(1, self.args.epochs):
-                shuffled, seed = knuth_shuffle([_.copy() for _ in lst], seeds[e-1])
-                print("Shuffle {} with seed {}".format(e, seed))
-                LOGGER.info("Shuffle {} with seed {}".format(e, seed))
-                # attach shuffled lists to original lists
-                for i in range(len(lst)):
-                    expanded[i] += shuffled[i]
-            return expanded
-
-        dataset = expand_dataset([list(TRAINING_LIST), list(LABELS)])
-
-        # create instance of MulticlassClassifier
-        multicc = MulticlassClassifier(POSSIBLE_LABELS, VotedPerceptron, self.args, self.MISMATCH_KERNEL)
-        multicc.train(np.array(dataset[0]), np.array(dataset[1]))
-
-
+global trainer
 def train(args):
-    # larger K makes the kernel stricter.
-    # For example with K=2, the normalized kernel between
-    # "fibrillazione atriale" and "fibrillazione atriale cronica"
-    # is 0.962 which means it thinks they are very similar,
-    # while with K=3 it gives 0.878.
-    # So if you have available a lot of examples a smaller K can
-    # work fine and makes the computation faster,
-    # on the other hand if you have a limited number of examples
-    # you may require a larger K to achieve an acceptable prediction rate
-    # on similar strings like those above and typos.
-    # For example in the ICD codes classifier the dataset was small
-    # and with K=2, "fibrillazione atriale" and "fibrillazione atriale cronica"
-    # were both classified as "I489", while with K=3 they got correctly
-    # classified as "I489" and "I482" respectively; meaning that with K=2
-    # the number of examples was not enough to compensate the large similarity
-    # (0.962) between the two.
-    # On the other hand, bad typos like "scopeso cadrico", which is a terribly typoed "scompenso cardiaco",
-    # with K=2 gets correctly classified as "I509",
-    # while with K=3 and K=4 it's wrongly classified, because the
-    # typos are so dense that a 3-mer or 4-mer are too wide to catch any useful substring
-    # (typing instead "scompeso cadrico", notice the extra m, already classifies correctly
-    # with both K=3 and K=4).
-    # Also some strings that appears in the dataset only once gets classified correctly
-    # sometimes by K=3, sometimes by K=4. So there's no accurate way to classify those.
-    # Overall, K=3 3epochs seems to work on most entries and it's faster.
-
-    # Note: the length of the string to vectorize must be greater than or equal to K
-    # and M must be less than K.
-    # M=1 is the more efficient and stricter.
-
-    # Note: with more than 1 epoch the order of the examples is randomized
-    # so subsequent trainings will result in different quality classifiers
-
     if args.k <= args.m:
         raise RuntimeError("Length k of subsequences must be greater than the number of mismatches m")
 
-    trainer = Trainer(args)
-    trainer.save_mismatch_vectors()
-    trainer.kernel_matrix()
-    trainer.train(args.seeds)
-    pass
+    matrix, labels = compute_matrix(f'fold{args.fold_number}_training', args)
+    print("training...")
+    start = default_timer()
+    clf = svm.LinearSVC(dual=False, C=args.c)
+    clf.fit(matrix, labels)
+    end = default_timer()
+    msg = f"Finished training in {end-start} seconds"
+    print(msg)
+    LOGGER.info(msg)
+    print("Saving classifier...")
+    with open(args.savedir+f'fold{args.fold_number}_classifier.pk', 'wb') as cf:
+        pickle.dump(clf, cf)
 
 
-def _predict_batch(pid, progress_list, batch):
-    size = len(batch)
-    predictions = []
-
-    # Initial call to print 0% progress
-    progress_list.insert(pid, [0, size])
-    print_progress_bar(progress_list)
-
-    for __, _ in enumerate(batch, start=1):
-        predicted = mcclassifier.predict(_[0])
-        real = _[1]
-        predictions.append((predicted, real))
-
-        # Update Progress Bar
-        progress_list[pid] = [__, size]
-        print_progress_bar(progress_list)
-
-    return predictions
-
-
-def init(mcc):
-    global mcclassifier
-    mcclassifier = mcc
+def compute_matrix(name, args):
+    global trainer
+    if not os.path.exists(VECTORS_SAVE_DIR+f'{name}_matrix.pk'):
+        print(f"Computing {name}_matrix")
+        from scipy import sparse
+        size = len(args.examples)
+        matrix = sparse.lil_matrix((size, len(ALPHABET)**args.k), dtype=int)
+        labels = list()
+        print_progress_bar(pid=0, iteration=0, total=size)
+        for n, (_, __) in enumerate(args.examples):
+            # add trailing spaces to all the examples shorter than K
+            ex = trainer.MISMATCH_KERNEL.mismatch_tree.normalize_input(_.lower())
+            if len(ex) < args.k:
+                ex = ex.ljust(args.k)
+            vector = trainer.MISMATCH_KERNEL.vectorize(ex)[1]
+            values = list(vector.values())
+            positions = list(vector.keys())
+            matrix[n, positions] = values
+            labels.append(__)
+            print_progress_bar(pid=0, iteration=n+1, total=size)
+        matrix = matrix.tocsr()
+        touch_dir(VECTORS_SAVE_DIR)
+        with open(VECTORS_SAVE_DIR+f'{name}_matrix.pk', 'wb') as mf:
+            pickle.dump(matrix, mf)
+    else:
+        print(f"{name}_matrix found")
+        with open(VECTORS_SAVE_DIR+f'{name}_matrix.pk', 'rb') as mf:
+            matrix = pickle.load(mf)
+        labels = [y for _, y in args.examples]
+    return matrix, labels
 
 
 def cross_validate(args):
+    msg = f"LinearSVC - C={args.c}"
+    print(msg)
+    LOGGER.info(msg)
     from configs import POSSIBLE_LABELS, TRAINING_LIST, LABELS
-    global POSSIBLE_LABELS, TRAINING_LIST, LABELS
+    global trainer
     # k-fold cross-validation
     from sklearn.model_selection import KFold
+    import numpy as np
     # data sample
     data = np.array(examples)
     # prepare cross validation
     args.splits = 4
     args.shuffle = True
     args.seed = 1
+    args.savedir = TRAINING_SAVE_DIR + f"{args.splits}-fold_C{args.c}_results/"
+    touch_dir(args.savedir)
     kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
     LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
     print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
+
+    trainer = Trainer(args)
+    trainer.save_mismatch_vectors()
+
     # enumerate splits
     for n, (train_indexes, test_indexes) in enumerate(kfold.split(TRAINING_LIST, LABELS)):
         args.fold_number = n
-        POSSIBLE_LABELS = set()
-        TRAINING_LIST = []
-        LABELS = []
-        for _, __ in data[train_indexes]:
-            TRAINING_LIST.append(_.lower())  # examples are not distinguished by case sensitivity
-            LABELS.append(__)
-            POSSIBLE_LABELS.add(__)
-        POSSIBLE_LABELS = list(POSSIBLE_LABELS)
-        TRAINING_LIST = np.array(TRAINING_LIST)
-        LABELS = np.array(LABELS)
+        args.examples = data[train_indexes]
 
-        savepath = TRAINING_SAVE_DIR + '/{}_{}_{}_fold{}_{}_{}_{}_epochs{}.pk' \
-            .format(args.splits, args.shuffle, args.seed, args.fold_number,
-                    "MismatchKernel", args.k, args.m, args.epochs)
-        if not os.path.exists(savepath):
+        if not os.path.exists(args.savedir+f'fold{args.fold_number}_classifier.pk'):
             LOGGER.info(f"Beginning training for fold {n}")
             print(f"Beginning training for fold {n}")
             train(args)
@@ -321,21 +196,20 @@ def cross_validate(args):
             LOGGER.info(f"Model found for fold {n}, skipping training...")
             print(f"Model found for fold {n}, skipping training...")
 
-        with open(savepath, 'rb') as f:
-            mcc = pickle.load(f)
-        predictions = []
-        if args.process_count > 1:
-            with Pool(processes=args.process_count, initializer=init, initargs=(mcc,)) as pool:
-                progress_list = Manager().list()
-                results = [pool.apply_async(func=_predict_batch, args=(pid, progress_list, batch))
-                           for pid, batch in enumerate(chunk(data[test_indexes], args.process_count))]
+        with open(args.savedir+f'fold{args.fold_number}_classifier.pk', 'rb') as sf:
+            clf = pickle.load(sf)
 
-                print("Predicting...")
-                for res in results:
-                    predictions += res.get()
-        else:
-            print("Predicting...")
-            predictions = _predict_batch(0, [], data[test_indexes])
+        args.examples = data[test_indexes]
+        matrix, real_labels = compute_matrix(f'fold{args.fold_number}_predict', args)
+
+        LOGGER.info(f"Beginning predictions for fold {n}")
+        print(f"Beginning predictions for fold {n}")
+        start = default_timer()
+        predictions = list(zip(clf.predict(matrix), real_labels))
+        end = default_timer()
+        msg = f"Finished predicting in {end-start} seconds"
+        print(msg)
+        LOGGER.info(msg)
 
         correct, mistaken = 0, 0
         y_true, y_pred = [], []
@@ -349,17 +223,15 @@ def cross_validate(args):
 
         from sklearn import metrics
         result = {
-            "cm": metrics.confusion_matrix(y_true, y_pred, labels=POSSIBLE_LABELS),
+            "confusion_matrix": metrics.confusion_matrix(y_true, y_pred, labels=POSSIBLE_LABELS),
             "labels": POSSIBLE_LABELS,
             "y_pred": y_pred,
             "y_true": y_true
         }
         accuracy = metrics.accuracy_score(y_true, y_pred)*100
-        savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
-        touch_dir(savedir)
-        with open(savedir+f"voted_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+        with open(args.savedir+f"linear_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
             pickle.dump(result, res_f)
-        info = f"Voted prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+        info = f"Linear prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
                f"accuracy: {accuracy}\n"
         print(info)
         LOGGER.info(info)
@@ -381,18 +253,11 @@ def main():
     # Create the parser for the train command.
     parser_train = subparsers.add_parser('train',
                                          help='Create and train a MulticlassClassifier')
-    parser_train.add_argument('-e', '--epochs',
-                              help='number of times the training set will be repeated.',
-                              type=int,
-                              choices=np.array(range(1, 11)),
-                              metavar='{1, 2, ..., 10}',
+    parser_train.add_argument('-c',
+                              help='regularization parameter.',
+                              type=float,
+                              metavar='{0.1, 0.2, ..., 10}',
                               default=1)
-    parser_train.add_argument('-s', '--seeds',
-                              help='number of times the training set will be repeated.',
-                              type=int,
-                              nargs='+',
-                              metavar='[int, int, ...]',
-                              default=None)
     parser_train.add_argument('-k',
                               help='length of k-mers for the (k-m)-mismatch vector.',
                               type=int,

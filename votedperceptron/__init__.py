@@ -1,2 +1,0 @@
-from .votedperceptron import VotedPerceptron
-from .multiclassclassifier import MulticlassClassifier

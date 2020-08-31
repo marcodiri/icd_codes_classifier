@@ -7,7 +7,7 @@ DATA_DIR = ROOT_DIR + 'data/'
 MODEL_SAVE_DIR = ROOT_DIR + 'save/'
 VECTORS_SAVE_DIR = ROOT_DIR + 'save/mismatch_vectors/'
 KERNELS_SAVE_DIR = ROOT_DIR + 'save/kernel_matrices/'
-TRAINING_SAVE_DIR = ROOT_DIR + 'save/trained_classifiers/'
+TRAINING_SAVE_DIR = ROOT_DIR + 'save/trained_classifiers/cross_validation/'
 LOG_PATH = ROOT_DIR + 'logs/'
 
 
