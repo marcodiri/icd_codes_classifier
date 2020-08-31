@@ -1,6 +1,7 @@
 import argparse
 from multiprocessing import Pool, Manager
 from timeit import default_timer
+from sklearn.model_selection import StratifiedKFold
 
 from utils import *
 from votedperceptron import VotedPerceptron, MulticlassClassifier
@@ -33,10 +34,11 @@ class Trainer:
 
         for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
+            ex = self.MISMATCH_KERNEL.mismatch_tree.normalize_input(ex)
             if len(ex) < self.args.k:
                 ex = ex.ljust(self.args.k)
             if ex not in vectors_dict:
-                ex_norm, mv = self.MISMATCH_KERNEL.mismatch_tree.vectorize(ex)
+                ex_norm, mv = self.MISMATCH_KERNEL.vectorize(ex)
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
@@ -255,27 +257,112 @@ def train(args):
     pass
 
 
-def predict(args):
-    def _predict(filename):
-        with open(filename, 'rb') as file:
-            mcc = pickle.load(file)
-            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input)))
+def _predict_batch(pid, progress_list, batch):
+    size = len(batch)
+    predictions = []
 
-    if args.filepath == "all":
-        if not os.path.exists(TRAINING_SAVE_DIR):
-            raise RuntimeError("{} directory not found".format(TRAINING_SAVE_DIR))
-        trained_classifiers_files = [f for f in os.listdir(TRAINING_SAVE_DIR)
-                                     if os.path.isfile(os.path.join(TRAINING_SAVE_DIR, f))
-                                     and ".pk" in f]
-        if not len(trained_classifiers_files):
-            raise RuntimeError("No training files found")
-        for _ in trained_classifiers_files:
-            _predict(TRAINING_SAVE_DIR+_)
-    else:
-        if os.path.exists(args.filepath):
-            _predict(args.filepath)
+    # Initial call to print 0% progress
+    progress_list.insert(pid, [0, size])
+    print_progress_bar(progress_list)
+
+    for __, _ in enumerate(batch, start=1):
+        predicted = mcclassifier.predict(_[0])
+        real = _[1]
+        predictions.append((predicted, real))
+
+        # Update Progress Bar
+        progress_list[pid] = [__, size]
+        print_progress_bar(progress_list)
+
+    return predictions
+
+
+def init(mcc):
+    global mcclassifier
+    mcclassifier = mcc
+
+
+def cross_validate(args):
+    from configs import POSSIBLE_LABELS, TRAINING_LIST, LABELS
+    global POSSIBLE_LABELS, TRAINING_LIST, LABELS
+    # k-fold cross-validation
+    from sklearn.model_selection import KFold
+    # data sample
+    data = np.array(examples)
+    # prepare cross validation
+    args.splits = 4
+    args.shuffle = True
+    args.seed = 1
+    kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
+    LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
+    print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
+    # enumerate splits
+    for n, (train_indexes, test_indexes) in enumerate(kfold.split(TRAINING_LIST, LABELS)):
+        args.fold_number = n
+        POSSIBLE_LABELS = set()
+        TRAINING_LIST = []
+        LABELS = []
+        for _, __ in data[train_indexes]:
+            TRAINING_LIST.append(_.lower())  # examples are not distinguished by case sensitivity
+            LABELS.append(__)
+            POSSIBLE_LABELS.add(__)
+        POSSIBLE_LABELS = list(POSSIBLE_LABELS)
+        TRAINING_LIST = np.array(TRAINING_LIST)
+        LABELS = np.array(LABELS)
+
+        savepath = TRAINING_SAVE_DIR + '/{}_{}_{}_fold{}_{}_{}_{}_epochs{}.pk' \
+            .format(args.splits, args.shuffle, args.seed, args.fold_number,
+                    "MismatchKernel", args.k, args.m, args.epochs)
+        if not os.path.exists(savepath):
+            LOGGER.info(f"Beginning training for fold {n}")
+            print(f"Beginning training for fold {n}")
+            train(args)
         else:
-            raise RuntimeError("{} not found".format(args.filepath))
+            LOGGER.info(f"Model found for fold {n}, skipping training...")
+            print(f"Model found for fold {n}, skipping training...")
+
+        with open(savepath, 'rb') as f:
+            mcc = pickle.load(f)
+        predictions = []
+        if args.process_count > 1:
+            with Pool(processes=args.process_count, initializer=init, initargs=(mcc,)) as pool:
+                progress_list = Manager().list()
+                results = [pool.apply_async(func=_predict_batch, args=(pid, progress_list, batch))
+                           for pid, batch in enumerate(chunk(data[test_indexes], args.process_count))]
+
+                print("Predicting...")
+                for res in results:
+                    predictions += res.get()
+        else:
+            print("Predicting...")
+            predictions = _predict_batch(0, [], data[test_indexes])
+
+        correct, mistaken = 0, 0
+        y_true, y_pred = [], []
+        for predicted, actual in predictions:
+            y_true.append(actual)
+            y_pred.append(predicted)
+            if predicted == actual:
+                correct += 1
+            else:
+                mistaken += 1
+
+        from sklearn import metrics
+        result = {
+            "cm": metrics.confusion_matrix(y_true, y_pred, POSSIBLE_LABELS),
+            "labels": POSSIBLE_LABELS,
+            "y_pred": y_pred,
+            "y_true": y_true
+        }
+        accuracy = metrics.accuracy_score(y_true, y_pred)*100
+        savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
+        touch_dir(savedir)
+        with open(savedir+f"voted_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+            pickle.dump(result, res_f)
+        info = f"Voted prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+               f"accuracy: {accuracy}\n\n"
+        print(info)
+        LOGGER.info(info)
 
 
 def main():
@@ -318,20 +405,7 @@ def main():
                               choices=np.array(range(1, 11)),
                               metavar='{1, 2, ..., 10}',
                               default=1)
-    parser_train.set_defaults(func=train)
-
-    # Create the parser for the test command.
-    parser_test = subparsers.add_parser('predict',
-                                        help='Predict an input with a trained MulticlassClassifier')
-    parser_test.add_argument('-i', '--input',
-                             help='The input to predict.',
-                             type=str
-                             )
-    parser_test.add_argument('-f', '--filepath',
-                             help='Training file to use to predict the input.',
-                             type=str
-                             )
-    parser_test.set_defaults(func=predict)
+    parser_train.set_defaults(func=cross_validate)
 
     # Parse arguments and call appropriate function (train or test).
     args = parser.parse_args()

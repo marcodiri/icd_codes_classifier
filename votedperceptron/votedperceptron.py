@@ -8,6 +8,7 @@ class VotedPerceptron:
     """
     def __init__(self, kernel):
         self.kernel = kernel
+        self.w = {}
 
         # initialize structures that will store the prediction vectors
         # to later compute predictions in O(k) kernel calculations
@@ -46,8 +47,12 @@ class VotedPerceptron:
             if y_predicted == y_real:  # correct prediction
                 self.current_weight += 1
             else:  # wrong prediction
+                # save prediction vector
+                x, v1 = self.kernel.vectorize(x)
+                for _, __ in v1.items():
+                    self.w[_] = self.w[_]+y_real*__ if _ in self.w else y_real*__
                 # save mistaken example and label and weight
-                self.mistaken_examples.append(x.copy())
+                self.mistaken_examples.append(x)
                 self.mistaken_labels.append(y_real)
                 self.weights.append(self.current_weight)
                 self.current_weight = 1  # reset weight
@@ -57,16 +62,16 @@ class VotedPerceptron:
         self.weights.append(self.current_weight)
 
     def predict(self, x):
-        pv_pre_activations = accumulate(yi * self.kernel.get_kernel(xi, x)
-                                        for yi, xi
-                                        in zip(self.mistaken_labels,
-                                               self.mistaken_examples))
+        pv_scores = accumulate(yi * self.kernel.get_kernel(xi, x)
+                               for yi, xi
+                               in zip(self.mistaken_labels,
+                                      self.mistaken_examples))
 
-        pre_activation = sum(
+        score = sum(
             w
             * copysign(1, pvpa)
             for w, pvpa
-            in zip(self.weights, pv_pre_activations)
+            in zip(self.weights, pv_scores)
         )
 
-        return pre_activation
+        return score

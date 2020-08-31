@@ -51,6 +51,7 @@ class MulticlassClassifier:
         # examples shorter than K
         if isinstance(self.kernel, MismatchKernel):
             for i, v in enumerate(training_list):
+                v = self.kernel.mismatch_tree.normalize_input(v)
                 if len(v) < self.args.k:
                     training_list[i] = v.ljust(self.args.k)
 
@@ -106,6 +107,7 @@ class MulticlassClassifier:
                 temp.mistaken_examples = __.mistaken_examples
                 temp.mistaken_labels = __.mistaken_labels
                 temp.weights = __.weights
+                temp.w = __.w
                 # temp.current_weight = __.current_weight  # not necessary
                 self.binary_classifiers[_] = temp
 
@@ -113,25 +115,28 @@ class MulticlassClassifier:
         print('Saving MulticlassClassifier')
         training_dir = TRAINING_SAVE_DIR
         touch_dir(training_dir)
-        save_filepath = training_dir+'/{}_{}_{}_epochs{}_errors{}.pk'\
-            .format(self.kernel.__class__.__name__, self.args.k, self.args.m, self.args.epochs, tot_errors)
+        save_filepath = training_dir+'/{}_{}_{}_fold{}_{}_{}_{}_epochs{}.pk'\
+            .format(self.args.splits, self.args.shuffle, self.args.seed, self.args.fold_number,
+                    self.kernel.__class__.__name__, self.args.k, self.args.m, self.args.epochs)
 
         with open(save_filepath, 'wb') as multicc_file:
             pickle.dump(self, multicc_file)
         LOGGER.info("Created save file in {}\n".format(save_filepath))
 
-    def predict(self, input_vector):
+    def predict(self, x):
         # Note: not multiprocess because the overhead of having
         # multiple processes overwhelms the time to make the calculation
 
-        # if kernel is (K,M)-Mismatch add trailing spaces to input
+        # if kernel is (K,M)-Mismatch add trailing spaces to x
         if isinstance(self.kernel, MismatchKernel):
-            if len(input_vector) < self.args.k:
-                input_vector = input_vector.ljust(self.args.k)
-        bc_scores = {label: binary_classifier.predict(input_vector)
+            x = x.lower()
+            x = self.kernel.mismatch_tree.normalize_input(x)
+            if len(x) < self.args.k:
+                x = x.ljust(self.args.k)
+        bc_scores = {label: binary_classifier.predict(x)
                      for label, binary_classifier in self.binary_classifiers.items()}
 
         sorted_scores = sorted(bc_scores.items(), key=lambda x: x[1], reverse=True)
-        print(f"First 3 scores: {sorted_scores[:3]}")
+        # print(f"First 3 scores: {sorted_scores[:3]}")
         return sorted_scores[0][0]
 
