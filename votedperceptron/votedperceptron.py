@@ -75,3 +75,15 @@ class VotedPerceptron:
         )
 
         return score
+
+    def _predict(self, x):
+        x, v1 = self.kernel.vectorize(x)
+        v2 = self.w
+        score = 0
+        # iterate on the shortest dok
+        dok1, dok2 = (v1, v2) if len(v1) < len(v2) else (v2, v1)
+        for i in dok1:
+            # if both indexes contains non zero elements, sum their product
+            if i in dok2:
+                score += dok1[i] * dok2[i]
+        return score
