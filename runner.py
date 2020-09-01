@@ -333,7 +333,7 @@ def cross_validate(args):
     args.splits = 4
     args.shuffle = True
     args.seed = 1
-    args.prediction_mode = "voted"
+    args.prediction_mode = "single"
     kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
     LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
     print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
@@ -399,16 +399,10 @@ def cross_validate(args):
         accuracy = metrics.accuracy_score(y_true, y_pred)*100
         savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
         touch_dir(savedir)
-        if args.prediction_mode == "voted":
-            with open(savedir+f"voted_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
-                pickle.dump(result, res_f)
-            info = f"Voted prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
-                   f"accuracy: {accuracy}\n"
-        else:
-            with open(savedir+f"single_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
-                pickle.dump(result, res_f)
-            info = f"Single prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
-                   f"accuracy: {accuracy}\n"
+        with open(savedir+f"{args.prediction_mode}_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+            pickle.dump(result, res_f)
+        info = f"{args.prediction_mode} prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+               f"accuracy: {accuracy}\n"
         print(info)
         LOGGER.info(info)
 
