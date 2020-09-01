@@ -257,7 +257,7 @@ def train(args):
     pass
 
 
-def _predict_batch(pid, progress_list, batch):
+def _predict_batch(pid, progress_list, batch, mode):
     size = len(batch)
     predictions = []
 
@@ -266,7 +266,7 @@ def _predict_batch(pid, progress_list, batch):
     print_progress_bar(progress_list)
 
     for __, _ in enumerate(batch, start=1):
-        predicted = mcclassifier.predict(_[0])
+        predicted = mcclassifier.predict(_[0], mode)
         true = _[1]
         predictions.append({
             "string": _[0],
@@ -289,6 +289,7 @@ def init(mcc):
 def cross_validate(args):
     from configs import POSSIBLE_LABELS, TRAINING_LIST, LABELS
     global POSSIBLE_LABELS, TRAINING_LIST, LABELS
+    SAVEDIR = TRAINING_SAVE_DIR+"cross_validation/"
     # k-fold cross-validation
     from sklearn.model_selection import KFold
     # data sample
@@ -297,6 +298,7 @@ def cross_validate(args):
     args.splits = 4
     args.shuffle = True
     args.seed = 1
+    args.prediction_mode = "voted"
     kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
     LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
     print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
@@ -331,7 +333,7 @@ def cross_validate(args):
         if args.process_count > 1:
             with Pool(processes=args.process_count, initializer=init, initargs=(mcc,)) as pool:
                 progress_list = Manager().list()
-                results = [pool.apply_async(func=_predict_batch, args=(pid, progress_list, batch))
+                results = [pool.apply_async(func=_predict_batch, args=(pid, progress_list, batch, args.prediction_mode))
                            for pid, batch in enumerate(chunk(data[test_indexes], args.process_count))]
 
                 print("Predicting...")
@@ -339,7 +341,7 @@ def cross_validate(args):
                     predictions += res.get()
         else:
             print("Predicting...")
-            predictions = _predict_batch(0, [], data[test_indexes])
+            predictions = _predict_batch(0, [], data[test_indexes], args.prediction_mode)
 
         correct, mistaken = 0, 0
         y_true, y_pred = [], []
@@ -360,12 +362,18 @@ def cross_validate(args):
             "predictions": predictions
         }
         accuracy = metrics.accuracy_score(y_true, y_pred)*100
-        savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
+        savedir = SAVEDIR+f"{args.splits}-fold_results/"
         touch_dir(savedir)
-        with open(savedir+f"voted_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
-            pickle.dump(result, res_f)
-        info = f"Voted prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
-               f"accuracy: {accuracy}\n"
+        if args.prediction_mode == "voted":
+            with open(savedir+f"voted_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+                pickle.dump(result, res_f)
+            info = f"Voted prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+                   f"accuracy: {accuracy}\n"
+        else:
+            with open(savedir+f"single_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+                pickle.dump(result, res_f)
+            info = f"Single prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+                   f"accuracy: {accuracy}\n"
         print(info)
         LOGGER.info(info)
 

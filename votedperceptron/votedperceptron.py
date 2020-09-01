@@ -61,7 +61,7 @@ class VotedPerceptron:
         # save the last weight
         self.weights.append(self.current_weight)
 
-    def predict(self, x):
+    def predict_voted(self, x):
         pv_scores = accumulate(yi * self.kernel.get_kernel(xi, x)
                                for yi, xi
                                in zip(self.mistaken_labels,
@@ -69,14 +69,14 @@ class VotedPerceptron:
 
         score = sum(
             w
-            * copysign(1, pvpa)
-            for w, pvpa
+            * copysign(1, pv_score)
+            for w, pv_score
             in zip(self.weights, pv_scores)
         )
 
         return score
 
-    def _predict(self, x):
+    def predict_single(self, x):
         x, v1 = self.kernel.vectorize(x)
         v2 = self.w
         score = 0

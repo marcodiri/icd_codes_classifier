@@ -123,7 +123,7 @@ class MulticlassClassifier:
             pickle.dump(self, multicc_file)
         LOGGER.info("Created save file in {}\n".format(save_filepath))
 
-    def predict(self, x):
+    def predict(self, x, mode):
         # Note: not multiprocess because the overhead of having
         # multiple processes overwhelms the time to make the calculation
 
@@ -133,8 +133,12 @@ class MulticlassClassifier:
             x = self.kernel.mismatch_tree.normalize_input(x)
             if len(x) < self.args.k:
                 x = x.ljust(self.args.k)
-        bc_scores = {label: binary_classifier.predict(x)
-                     for label, binary_classifier in self.binary_classifiers.items()}
+        if mode == "single":
+            bc_scores = {label: binary_classifier.predict_single(x)
+                         for label, binary_classifier in self.binary_classifiers.items()}
+        else:
+            bc_scores = {label: binary_classifier.predict_voted(x)
+                         for label, binary_classifier in self.binary_classifiers.items()}
 
         sorted_scores = sorted(bc_scores.items(), key=lambda x: x[1], reverse=True)
         # print(f"First 3 scores: {sorted_scores[:3]}")
