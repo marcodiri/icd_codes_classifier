@@ -210,6 +210,7 @@ class Trainer:
         # create instance of MulticlassClassifier
         multicc = MulticlassClassifier(POSSIBLE_LABELS, VotedPerceptron, self.args, self.MISMATCH_KERNEL)
         multicc.train(np.array(dataset[0]), np.array(dataset[1]))
+        return multicc
 
 
 def train(args):
@@ -252,8 +253,42 @@ def train(args):
     trainer = Trainer(args)
     trainer.save_mismatch_vectors()
     trainer.kernel_matrix()
-    trainer.train(args.seeds)
-    pass
+    trained_classifier = trainer.train(args.seeds)
+
+    # return number of prediction vectors making up each binary classifier
+    bc_vector_counts = [(k, len(v.weights))
+                        for k, v in trained_classifier.binary_classifiers.items()]
+    tot_errors = sum(e for c, e in bc_vector_counts)
+
+    LOGGER.info("Per class error distribution:")
+    LOGGER.info("{}".format(bc_vector_counts))
+    LOGGER.info("Total errors: {}".format(tot_errors))
+    print("Total errors: {}".format(tot_errors))
+
+    # using more processes generates larger VotedPerceptron objects
+    # in terms of memory usage, so recreate them with same
+    # attributes to compress the MulticlassClassifier
+    if args.process_count > 1:
+        print("Compressing MulticlassClassifier")
+        for _, __ in trained_classifier.binary_classifiers.items():
+            temp = trained_classifier.binary_classifier(trained_classifier.kernel)
+            temp.mistaken_examples = __.mistaken_examples
+            temp.mistaken_labels = __.mistaken_labels
+            temp.weights = __.weights
+            temp.w = __.w
+            # temp.current_weight = __.current_weight  # not necessary
+            trained_classifier.binary_classifiers[_] = temp
+
+    # save trained MulticlassClassifier
+    print('Saving MulticlassClassifier')
+    training_dir = TRAINING_SAVE_DIR
+    touch_dir(training_dir)
+    save_filepath = training_dir + '/{}_{}_{}_epochs{}_errors{}.pk' \
+        .format(trained_classifier.kernel.__class__.__name__, args.k, args.m, args.epochs, tot_errors)
+
+    with open(save_filepath, 'wb') as multicc_file:
+        pickle.dump(trained_classifier, multicc_file)
+    LOGGER.info("Created save file in {}\n".format(save_filepath))
 
 
 def predict(args):
