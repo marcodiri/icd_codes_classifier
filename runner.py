@@ -267,8 +267,12 @@ def _predict_batch(pid, progress_list, batch):
 
     for __, _ in enumerate(batch, start=1):
         predicted = mcclassifier.predict(_[0])
-        real = _[1]
-        predictions.append((predicted, real))
+        true = _[1]
+        predictions.append({
+            "string": _[0],
+            "predicted": predicted,
+            "true": true
+        })
 
         # Update Progress Bar
         progress_list[pid] = [__, size]
@@ -339,10 +343,12 @@ def cross_validate(args):
 
         correct, mistaken = 0, 0
         y_true, y_pred = [], []
-        for predicted, actual in predictions:
-            y_true.append(actual)
-            y_pred.append(predicted)
-            if predicted == actual:
+        for _ in predictions:
+            predicted = _["predicted"]
+            true = _["true"]
+            y_true.append(predicted)
+            y_pred.append(true)
+            if predicted == true:
                 correct += 1
             else:
                 mistaken += 1
@@ -351,8 +357,7 @@ def cross_validate(args):
         result = {
             "cm": metrics.confusion_matrix(y_true, y_pred, labels=POSSIBLE_LABELS),
             "labels": POSSIBLE_LABELS,
-            "y_pred": y_pred,
-            "y_true": y_true
+            "predictions": predictions
         }
         accuracy = metrics.accuracy_score(y_true, y_pred)*100
         savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
@@ -414,4 +419,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
