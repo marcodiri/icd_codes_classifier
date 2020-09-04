@@ -306,8 +306,8 @@ def _predict_batch(pid, progress_list, batch, mode):
         true = _[1]
         predictions.append({
             "string": _[0],
-            "predicted": predicted,
-            "true": true
+            "true": true,
+            "predicted": predicted
         })
 
         # Update Progress Bar
@@ -333,7 +333,7 @@ def cross_validate(args):
     args.splits = 4
     args.shuffle = True
     args.seed = 1
-    args.prediction_mode = "single"
+    args.prediction_mode = "voted"
     kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
     LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
     print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
@@ -397,10 +397,40 @@ def cross_validate(args):
             "predictions": predictions
         }
         accuracy = metrics.accuracy_score(y_true, y_pred)*100
+
         savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
         touch_dir(savedir)
-        with open(savedir+f"{args.prediction_mode}_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+        filename = f"{args.prediction_mode}_fold{n}_accuracy{round(accuracy)}"
+        with open(savedir+filename+".pk", "wb") as res_f:
             pickle.dump(result, res_f)
+
+        def analyze_results():
+            import json
+            with open(savedir+filename+"_errors.txt", "w", encoding="utf8") as af:
+                af.write(f"{args.splits}-fold, shuffle {args.shuffle}, seed {args.seed}, "
+                         f"score method {args.prediction_mode}\n"
+                         f"training examples: {len(data[train_indexes])}, test examples: {len(data[test_indexes])}, "
+                         f"accuracy: {accuracy}\n\n"
+                         f"Mistakes ({mistaken}):\n\n")
+                errors = []
+                for pred in result["predictions"]:
+                    if pred["true"] != pred["predicted"]:
+                        af.write("prediction: "+json.dumps(pred)+"\n")
+                        af.write("\n")
+                        errors.append(pred)
+                        examples_list = [{}, {}]
+                        for _, __ in data[train_indexes]:
+                            if __ == pred["true"]:
+                                examples_list[0][_] = examples_list[0][_]+1 if _ in examples_list[0] else 1
+                            elif __ == pred["predicted"]:
+                                examples_list[1][_] = examples_list[1][_]+1 if _ in examples_list[1] else 1
+                        af.write(f"{pred['true']} examples ({sum(_ for _ in examples_list[0].values())}): "+
+                                 json.dumps(examples_list[0]).replace(": ", "x"))
+                        af.write("\n\n")
+                        af.write(f"{pred['predicted']} examples ({sum(_ for _ in examples_list[1].values())}): "+
+                                 json.dumps(examples_list[1]).replace(": ", "x"))
+                        af.write("\n\n"+"-"*40+"\n\n")
+        analyze_results()
         info = f"{args.prediction_mode} prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
                f"accuracy: {accuracy}\n"
         print(info)
