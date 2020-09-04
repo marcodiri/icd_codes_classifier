@@ -291,6 +291,30 @@ def train(args):
     with open(save_filepath, 'wb') as multicc_file:
         pickle.dump(trained_classifier, multicc_file)
     LOGGER.info("Created save file in {}\n".format(save_filepath))
+    print("Created save file in {}\n".format(save_filepath))
+
+
+def predict(args):
+    def _predict(filename):
+        with open(filename, 'rb') as file:
+            mcc = pickle.load(file)
+            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input, args.prediction_mode)))
+
+    if args.filepath == "all":
+        if not os.path.exists(TRAINING_SAVE_DIR):
+            raise RuntimeError("{} directory not found".format(TRAINING_SAVE_DIR))
+        trained_classifiers_files = [f for f in os.listdir(TRAINING_SAVE_DIR)
+                                     if os.path.isfile(os.path.join(TRAINING_SAVE_DIR, f))
+                                     and ".pk" in f]
+        if not len(trained_classifiers_files):
+            raise RuntimeError("No training files found")
+        for _ in trained_classifiers_files:
+            _predict(TRAINING_SAVE_DIR+_)
+    else:
+        if os.path.exists(args.filepath):
+            _predict(args.filepath)
+        else:
+            raise RuntimeError("{} not found".format(args.filepath))
 
 
 def _predict_batch(pid, progress_list, batch, mode):
@@ -333,7 +357,6 @@ def cross_validate(args):
     args.splits = 4
     args.shuffle = True
     args.seed = 1
-    args.prediction_mode = "voted"
     kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
     LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
     print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
@@ -478,6 +501,25 @@ def main():
                               metavar='{1, 2, ..., 10}',
                               default=1)
     parser_train.set_defaults(func=cross_validate)
+
+    # Create the parser for the test command.
+    parser_test = subparsers.add_parser('predict',
+                                        help='Predict an input with a trained MulticlassClassifier')
+    parser_test.add_argument('-i', '--input',
+                             help='The input to predict.',
+                             type=str
+                             )
+    parser_test.add_argument('-pm', '--prediction_mode',
+                             help='If voted or single vector prediction.',
+                             type=str,
+                             choices=["voted", "single"],
+                             default="voted"
+                             )
+    parser_test.add_argument('-f', '--filepath',
+                             help='Training file to use to predict the input.',
+                             type=str
+                             )
+    parser_test.set_defaults(func=predict)
 
     # Parse arguments and call appropriate function (train or test).
     args = parser.parse_args()
