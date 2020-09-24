@@ -24,7 +24,7 @@ LABELS = []
 # to put strings in the TRAINING_LIST list,
 # corresponding labels in the LABELS list in the same order
 # and in POSSIBLE_LABELS a set of every labels
-with open(DATA_DIR + "examples.pk", 'rb') as examples_file:
+with open(DATA_DIR + "examples_filtered10_codelen3.pk", 'rb') as examples_file:
     examples = pickle.load(examples_file)
     for _, __ in examples:
         TRAINING_LIST.append(_.lower())  # examples are not distinguished by case sensitivity

@@ -34,13 +34,23 @@ class VotedPerceptron:
         ind = -1
         for x, y_real in zip(training_list, labels):
             ind += 1
-            # computing the prediction is the slow part.
-            # It does O(n_examples * k^2) kernel calculations
-            # with k number of mistakes made during the training
-            prediction = sum(ml * self.kernel.get_kernel(me, x)
-                             for me, ml
-                             in zip(self.mistaken_examples, self.mistaken_labels)
-                             )
+            # prediction using previous mistakes, faster if we can keep the
+            # kernel matrix in memory because get_kernel returns immediately
+            # prediction = sum(ml * self.kernel.get_kernel(me, x)
+            #                  for me, ml
+            #                  in zip(self.mistaken_examples, self.mistaken_labels)
+            #                  )
+
+            # prediction using the prediction vector
+            prediction = 0
+            x, v1 = self.kernel.vectorize(x)
+            v2 = self.w
+            # iterate on the shortest dok
+            dok1, dok2 = (v1, v2) if len(v1) < len(v2) else (v2, v1)
+            for i in dok1:
+                # if both indexes contains non zero elements, sum their product
+                if i in dok2:
+                    prediction += dok1[i] * dok2[i]
 
             y_predicted = copysign(1, prediction)
 

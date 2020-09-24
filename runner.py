@@ -252,7 +252,7 @@ def train(args):
 
     trainer = Trainer(args)
     trainer.save_mismatch_vectors()
-    trainer.kernel_matrix()
+    # trainer.kernel_matrix()
     trained_classifier = trainer.train(args.seeds)
 
     # return number of prediction vectors making up each binary classifier
