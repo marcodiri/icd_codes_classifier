@@ -28,8 +28,7 @@ class Trainer:
         vectors_dict = {}
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
@@ -41,8 +40,7 @@ class Trainer:
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return vectors_dict
 
@@ -99,8 +97,7 @@ class Trainer:
         size = len(chk)
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, current_key in enumerate(chk, start=1):
             rows[current_key] = {}
@@ -111,8 +108,7 @@ class Trainer:
                 j += 1
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return rows
 
@@ -152,7 +148,8 @@ class Trainer:
         else:
             size = len(keys)
             # Initial call to print 0% progress
-            print_progress_bar([[0, size]], length=50)
+            print_progress_bar(pid=0, iteration=0, total=size)
+
             for i, k in enumerate(keys, start=1):
                 j = i
                 while j < len(mv):
@@ -163,7 +160,7 @@ class Trainer:
                     j += 1
 
                 # Update Progress Bar
-                print_progress_bar([[i, size]], length=50)
+                print_progress_bar(pid=0, iteration=n, total=size)
 
         self.MISMATCH_KERNEL.KERNEL_MATRIX = matrix
 
