@@ -253,7 +253,7 @@ def train(args):
     trained_classifier = trainer.train(args.seeds)
 
     # return number of prediction vectors making up each binary classifier
-    bc_vector_counts = [(k, len(v.weights))
+    bc_vector_counts = [(k, v.errors)
                         for k, v in trained_classifier.binary_classifiers.items()]
     tot_errors = sum(e for c, e in bc_vector_counts)
 
@@ -269,9 +269,7 @@ def train(args):
         print("Compressing MulticlassClassifier")
         for _, __ in trained_classifier.binary_classifiers.items():
             temp = trained_classifier.binary_classifier(trained_classifier.kernel)
-            temp.mistaken_examples = __.mistaken_examples
-            temp.mistaken_labels = __.mistaken_labels
-            temp.weights = __.weights
+            temp.errors = __.errors
             temp.w = __.w
             # temp.current_weight = __.current_weight  # not necessary
             trained_classifier.binary_classifiers[_] = temp
@@ -292,7 +290,7 @@ def predict(args):
     def _predict(filename):
         with open(filename, 'rb') as file:
             mcc = pickle.load(file)
-            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input, args.prediction_mode)))
+            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input)))
 
     if args.filepath == "all":
         if not os.path.exists(TRAINING_SAVE_DIR):
@@ -359,12 +357,6 @@ def main():
     parser_test.add_argument('-i', '--input',
                              help='The input to predict.',
                              type=str
-                             )
-    parser_test.add_argument('-pm', '--prediction_mode',
-                             help='If voted or single vector prediction.',
-                             type=str,
-                             choices=["voted", "single"],
-                             default="voted"
                              )
     parser_test.add_argument('-f', '--filepath',
                              help='Training file to use to predict the input.',

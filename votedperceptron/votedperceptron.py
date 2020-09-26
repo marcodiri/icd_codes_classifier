@@ -8,38 +8,16 @@ class VotedPerceptron:
     """
     def __init__(self, kernel):
         self.kernel = kernel
+
+        # prediction vector
         self.w = {}
 
-        # initialize structures that will store the prediction vectors
-        # to later compute predictions in O(k) kernel calculations
-        # with k = len(mistaken_examples) (number of errors during training)
-        self.mistaken_examples = []
-        self.mistaken_labels = []
-
-        # prediction vector votes generated during training
-        self.weights = []
+        self.errors = 0
 
     def train(self, training_list, labels):
-        # initialize structures
-        if not self.mistaken_examples:
-            self.current_weight = 0
-            init_example = ""  # the empty string corresponds to the zeros vector
-            self.mistaken_examples.append(init_example)
-            self.mistaken_labels.append(1)
-        else:
-            # if there are more examples the weight saved at
-            # the end of the last chunk is incorrect
-            # (it was only needed to save the intermediate epoch)
-            self.weights.pop()
         ind = -1
         for x, y_real in zip(training_list, labels):
             ind += 1
-            # prediction using previous mistakes, faster if we can keep the
-            # kernel matrix in memory because get_kernel returns immediately
-            # prediction = sum(ml * self.kernel.get_kernel(me, x)
-            #                  for me, ml
-            #                  in zip(self.mistaken_examples, self.mistaken_labels)
-            #                  )
 
             # prediction using the prediction vector
             prediction = 0
@@ -54,37 +32,12 @@ class VotedPerceptron:
 
             y_predicted = copysign(1, prediction)
 
-            if y_predicted == y_real:  # correct prediction
-                self.current_weight += 1
-            else:  # wrong prediction
-                # save prediction vector
+            if y_predicted != y_real:  # wrong prediction
+                self.errors += 1
+                # update prediction vector
                 x, v1 = self.kernel.vectorize(x)
                 for _, __ in v1.items():
                     self.w[_] = self.w[_]+y_real*__ if _ in self.w else y_real*__
-                # save mistaken example and label and weight
-                self.mistaken_examples.append(x)
-                self.mistaken_labels.append(y_real)
-                self.weights.append(self.current_weight)
-                self.current_weight = 1  # reset weight
-
-        # training complete
-        # save the last weight
-        self.weights.append(self.current_weight)
-
-    def predict_voted(self, x):
-        pv_scores = accumulate(yi * self.kernel.get_kernel(xi, x)
-                               for yi, xi
-                               in zip(self.mistaken_labels,
-                                      self.mistaken_examples))
-
-        score = sum(
-            w
-            * copysign(1, pv_score)
-            for w, pv_score
-            in zip(self.weights, pv_scores)
-        )
-
-        return score
 
     def predict_single(self, x):
         x, v1 = self.kernel.vectorize(x)
