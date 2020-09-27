@@ -1,5 +1,5 @@
 import argparse
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 from timeit import default_timer
 from sklearn.model_selection import StratifiedKFold
 
@@ -24,13 +24,12 @@ class Trainer:
             with open(km_file, 'rb') as kernel_matrix_file:
                 self.MISMATCH_KERNEL.KERNEL_MATRIX = pickle.load(kernel_matrix_file)
 
-    def _chunk_mismatch_vectors(self, pid, progress_list, chk):
+    def _chunk_mismatch_vectors(self, pid, chk):
         size = len(chk)
         vectors_dict = {}
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
@@ -42,8 +41,7 @@ class Trainer:
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return vectors_dict
 
@@ -65,10 +63,9 @@ class Trainer:
         vectors_dict = {}
 
         if processes > 1:
-            progress_list = Manager().list()
             with Pool(processes=processes) as pool:
                 chunks = [pool.apply_async(func=self._chunk_mismatch_vectors,
-                                           args=(pid, progress_list, chk)
+                                           args=(pid, chk)
                                            )
                           for pid, chk in enumerate(chunk(TRAINING_LIST, processes))
                           ]
@@ -95,13 +92,12 @@ class Trainer:
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
         LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
-    def _compute_row(self, pid, progress_list, chk, keys, kernel):
+    def _compute_row(self, pid, chk, keys, kernel):
         rows = {}
         size = len(chk)
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, current_key in enumerate(chk, start=1):
             rows[current_key] = {}
@@ -112,8 +108,7 @@ class Trainer:
                 j += 1
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return rows
 
@@ -141,9 +136,8 @@ class Trainer:
             # before chunking so every process gets about the
             # same amount of work
             with Pool(processes=processes) as pool:
-                progress_list = Manager().list()
                 rows_chunks = [pool.apply_async(func=self._compute_row,
-                                                args=(pid, progress_list, chk, keys, self.MISMATCH_KERNEL)
+                                                args=(pid, chk, keys, self.MISMATCH_KERNEL)
                                                 )
                                for pid, chk in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
                                ]
@@ -153,7 +147,8 @@ class Trainer:
         else:
             size = len(keys)
             # Initial call to print 0% progress
-            print_progress_bar([[0, size]], length=50)
+            print_progress_bar(pid=0, iteration=0, total=size)
+
             for i, k in enumerate(keys, start=1):
                 j = i
                 while j < len(mv):
@@ -164,7 +159,7 @@ class Trainer:
                     j += 1
 
                 # Update Progress Bar
-                print_progress_bar([[i, size]], length=50)
+                print_progress_bar(pid=0, iteration=i, total=size)
 
         self.MISMATCH_KERNEL.KERNEL_MATRIX = matrix
 
@@ -317,13 +312,12 @@ def predict(args):
             raise RuntimeError("{} not found".format(args.filepath))
 
 
-def _predict_batch(pid, progress_list, batch, mode):
+def _predict_batch(pid, batch, mode):
     size = len(batch)
     predictions = []
 
     # Initial call to print 0% progress
-    progress_list.insert(pid, [0, size])
-    print_progress_bar(progress_list)
+    print_progress_bar(pid=pid, iteration=0, total=size)
 
     for __, _ in enumerate(batch, start=1):
         predicted = mcclassifier.predict(_[0], mode)
@@ -335,8 +329,7 @@ def _predict_batch(pid, progress_list, batch, mode):
         })
 
         # Update Progress Bar
-        progress_list[pid] = [__, size]
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=__, total=size)
 
     return predictions
 
@@ -390,8 +383,7 @@ def cross_validate(args):
         predictions = []
         if args.process_count > 1:
             with Pool(processes=args.process_count, initializer=init, initargs=(mcc,)) as pool:
-                progress_list = Manager().list()
-                results = [pool.apply_async(func=_predict_batch, args=(pid, progress_list, batch, args.prediction_mode))
+                results = [pool.apply_async(func=_predict_batch, args=(pid, batch, args.prediction_mode))
                            for pid, batch in enumerate(chunk(data[test_indexes], args.process_count))]
 
                 print("Predicting...")
@@ -399,7 +391,7 @@ def cross_validate(args):
                     predictions += res.get()
         else:
             print("Predicting...")
-            predictions = _predict_batch(0, [], data[test_indexes], args.prediction_mode)
+            predictions = _predict_batch(0, data[test_indexes], args.prediction_mode)
 
         correct, mistaken = 0, 0
         y_true, y_pred = [], []
@@ -470,6 +462,12 @@ def main():
                         help='Number of worker processes to use.',
                         type=int,
                         default=os.cpu_count())
+    parser.add_argument('-pm', '--prediction_mode',
+                        help='If voted or single vector prediction.',
+                        type=str,
+                        choices=["voted", "single"],
+                        default="voted"
+                        )
 
     subparsers = parser.add_subparsers(help='sub-command help')
 
@@ -508,12 +506,6 @@ def main():
     parser_test.add_argument('-i', '--input',
                              help='The input to predict.',
                              type=str
-                             )
-    parser_test.add_argument('-pm', '--prediction_mode',
-                             help='If voted or single vector prediction.',
-                             type=str,
-                             choices=["voted", "single"],
-                             default="voted"
                              )
     parser_test.add_argument('-f', '--filepath',
                              help='Training file to use to predict the input.',

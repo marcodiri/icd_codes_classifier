@@ -1,4 +1,4 @@
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 from timeit import default_timer
 from utils import *
 from mismatch_kernel import MismatchKernel
@@ -28,12 +28,11 @@ class MulticlassClassifier:
                         np.ones(labels.shape, np.int8),
                         -np.ones(labels.shape, np.int8))
 
-    def _chunk_binary_classifiers_train(self, pid, progress_list, chunk, training_list, training_labels):
+    def _chunk_binary_classifiers_train(self, pid, chunk, training_list, training_labels):
         size = len(chunk)
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, label in enumerate(chunk, start=1):
             binary_classifier = chunk[label]
@@ -41,8 +40,7 @@ class MulticlassClassifier:
             binary_classifier.train(training_list, normalized_labels)
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return chunk
 
@@ -61,9 +59,8 @@ class MulticlassClassifier:
 
         if self.args.process_count is not None and self.args.process_count > 1:
             with Pool(processes=self.args.process_count) as pool:
-                progress_list = Manager().list()
                 chunks = [pool.apply_async(func=self._chunk_binary_classifiers_train,
-                                           args=(pid, progress_list, chk, training_list, labels))
+                                           args=(pid, chk, training_list, labels))
                           for pid, chk in enumerate(chunk(self.binary_classifiers, self.args.process_count))]
 
                 # retrieve the trained binary classifiers back from the process pool and
@@ -75,13 +72,13 @@ class MulticlassClassifier:
         else:
             size = len(self.binary_classifiers)
             # Initial call to print 0% progress
-            print_progress_bar([[0, size]], length=50)
+            print_progress_bar(pid=0, iteration=0, total=size)
             # train each binary classifier with a single process
             for n, (label, binary_classifier) in enumerate(self.binary_classifiers.items(), start=1):
                 normalized_labels = self.normalize_labels(labels, label)
                 binary_classifier.train(training_list, normalized_labels)
                 # print("Finished training for class {}/{} - {}".format(n, len(self.binary_classifiers), label))
-                print_progress_bar([[n, size]], length=50)
+                print_progress_bar(pid=0, iteration=n, total=size)
 
         end = default_timer()
 
