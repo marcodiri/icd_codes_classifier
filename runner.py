@@ -1,5 +1,5 @@
 import argparse
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 from timeit import default_timer
 from sklearn.model_selection import StratifiedKFold
 
@@ -29,8 +29,7 @@ class Trainer:
         vectors_dict = {}
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, ex in enumerate(chk, start=1):
             # add trailing spaces to all the examples shorter than K
@@ -42,8 +41,7 @@ class Trainer:
                 vectors_dict[ex_norm] = mv
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return vectors_dict
 
@@ -65,10 +63,9 @@ class Trainer:
         vectors_dict = {}
 
         if processes > 1:
-            progress_list = Manager().list()
             with Pool(processes=processes) as pool:
                 chunks = [pool.apply_async(func=self._chunk_mismatch_vectors,
-                                           args=(pid, progress_list, chk)
+                                           args=(pid, chk)
                                            )
                           for pid, chk in enumerate(chunk(TRAINING_LIST, processes))
                           ]
@@ -95,13 +92,12 @@ class Trainer:
         print("Finished mismatch vectors calculation in {} seconds".format(end-start))
         LOGGER.info("Finished mismatch vectors calculation in {} seconds".format(end-start))
 
-    def _compute_row(self, pid, progress_list, chk, keys, kernel):
+    def _compute_row(self, pid, chk, keys, kernel):
         rows = {}
         size = len(chk)
 
         # Initial call to print 0% progress
-        progress_list.insert(pid, [0, size])
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=0, total=size)
 
         for n, current_key in enumerate(chk, start=1):
             rows[current_key] = {}
@@ -112,8 +108,7 @@ class Trainer:
                 j += 1
 
             # Update Progress Bar
-            progress_list[pid] = [n, size]
-            print_progress_bar(progress_list)
+            print_progress_bar(pid=pid, iteration=n, total=size)
 
         return rows
 
@@ -141,9 +136,8 @@ class Trainer:
             # before chunking so every process gets about the
             # same amount of work
             with Pool(processes=processes) as pool:
-                progress_list = Manager().list()
                 rows_chunks = [pool.apply_async(func=self._compute_row,
-                                                args=(pid, progress_list, chk, keys, self.MISMATCH_KERNEL)
+                                                args=(pid, chk, keys, self.MISMATCH_KERNEL)
                                                 )
                                for pid, chk in enumerate(chunk(knuth_shuffle((keys.copy(),))[0][0], processes))
                                ]
@@ -153,7 +147,8 @@ class Trainer:
         else:
             size = len(keys)
             # Initial call to print 0% progress
-            print_progress_bar([[0, size]], length=50)
+            print_progress_bar(pid=0, iteration=0, total=size)
+
             for i, k in enumerate(keys, start=1):
                 j = i
                 while j < len(mv):
@@ -164,7 +159,7 @@ class Trainer:
                     j += 1
 
                 # Update Progress Bar
-                print_progress_bar([[i, size]], length=50)
+                print_progress_bar(pid=0, iteration=i, total=size)
 
         self.MISMATCH_KERNEL.KERNEL_MATRIX = matrix
 
@@ -253,11 +248,11 @@ def train(args):
 
     trainer = Trainer(args)
     trainer.save_mismatch_vectors()
-    trainer.kernel_matrix()
+    #trainer.kernel_matrix()
     trained_classifier = trainer.train(args.seeds)
 
     # return number of prediction vectors making up each binary classifier
-    bc_vector_counts = [(k, len(v.weights))
+    bc_vector_counts = [(k, v.errors)
                         for k, v in trained_classifier.binary_classifiers.items()]
     tot_errors = sum(e for c, e in bc_vector_counts)
 
@@ -273,9 +268,7 @@ def train(args):
         print("Compressing MulticlassClassifier")
         for _, __ in trained_classifier.binary_classifiers.items():
             temp = trained_classifier.binary_classifier(trained_classifier.kernel)
-            temp.mistaken_examples = __.mistaken_examples
-            temp.mistaken_labels = __.mistaken_labels
-            temp.weights = __.weights
+            temp.errors = __.errors
             temp.w = __.w
             # temp.current_weight = __.current_weight  # not necessary
             trained_classifier.binary_classifiers[_] = temp
@@ -298,7 +291,7 @@ def predict(args):
     def _predict(filename):
         with open(filename, 'rb') as file:
             mcc = pickle.load(file)
-            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input, args.prediction_mode)))
+            print("{} guessed {}\n".format(filename.split("/")[-1], mcc.predict(args.input)))
 
     if args.filepath == "all":
         if not os.path.exists(TRAINING_SAVE_DIR):
@@ -317,16 +310,15 @@ def predict(args):
             raise RuntimeError("{} not found".format(args.filepath))
 
 
-def _predict_batch(pid, progress_list, batch, mode):
+def _predict_batch(pid, batch):
     size = len(batch)
     predictions = []
 
     # Initial call to print 0% progress
-    progress_list.insert(pid, [0, size])
-    print_progress_bar(progress_list)
+    print_progress_bar(pid=pid, iteration=0, total=size)
 
     for __, _ in enumerate(batch, start=1):
-        predicted = mcclassifier.predict(_[0], mode)
+        predicted = mcclassifier.predict(_[0])
         true = _[1]
         predictions.append({
             "string": _[0],
@@ -335,8 +327,7 @@ def _predict_batch(pid, progress_list, batch, mode):
         })
 
         # Update Progress Bar
-        progress_list[pid] = [__, size]
-        print_progress_bar(progress_list)
+        print_progress_bar(pid=pid, iteration=__, total=size)
 
     return predictions
 
@@ -354,7 +345,7 @@ def cross_validate(args):
     # data sample
     data = np.array(examples)
     # prepare cross validation
-    args.splits = 4
+    args.splits = 5
     args.shuffle = True
     args.seed = 1
     kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
@@ -390,8 +381,7 @@ def cross_validate(args):
         predictions = []
         if args.process_count > 1:
             with Pool(processes=args.process_count, initializer=init, initargs=(mcc,)) as pool:
-                progress_list = Manager().list()
-                results = [pool.apply_async(func=_predict_batch, args=(pid, progress_list, batch, args.prediction_mode))
+                results = [pool.apply_async(func=_predict_batch, args=(pid, batch))
                            for pid, batch in enumerate(chunk(data[test_indexes], args.process_count))]
 
                 print("Predicting...")
@@ -399,7 +389,7 @@ def cross_validate(args):
                     predictions += res.get()
         else:
             print("Predicting...")
-            predictions = _predict_batch(0, [], data[test_indexes], args.prediction_mode)
+            predictions = _predict_batch(0, data[test_indexes])
 
         correct, mistaken = 0, 0
         y_true, y_pred = [], []
@@ -423,7 +413,7 @@ def cross_validate(args):
 
         savedir = TRAINING_SAVE_DIR+f"{args.splits}-fold_results/"
         touch_dir(savedir)
-        filename = f"{args.prediction_mode}_fold{n}_accuracy{round(accuracy)}"
+        filename = f"vector_fold{n}_accuracy{round(accuracy)}"
         with open(savedir+filename+".pk", "wb") as res_f:
             pickle.dump(result, res_f)
 
@@ -431,7 +421,7 @@ def cross_validate(args):
             import json
             with open(savedir+filename+"_errors.txt", "w", encoding="utf8") as af:
                 af.write(f"{args.splits}-fold, shuffle {args.shuffle}, seed {args.seed}, "
-                         f"score method {args.prediction_mode}\n"
+                         f"score method vector\n"
                          f"training examples: {len(data[train_indexes])}, test examples: {len(data[test_indexes])}, "
                          f"accuracy: {accuracy}\n\n"
                          f"Mistakes ({mistaken}):\n\n")
@@ -454,7 +444,7 @@ def cross_validate(args):
                                  json.dumps(examples_list[1]).replace(": ", "x"))
                         af.write("\n\n"+"-"*40+"\n\n")
         analyze_results()
-        info = f"{args.prediction_mode} prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+        info = f"vector prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
                f"accuracy: {accuracy}\n"
         print(info)
         LOGGER.info(info)
@@ -508,12 +498,6 @@ def main():
     parser_test.add_argument('-i', '--input',
                              help='The input to predict.',
                              type=str
-                             )
-    parser_test.add_argument('-pm', '--prediction_mode',
-                             help='If voted or single vector prediction.',
-                             type=str,
-                             choices=["voted", "single"],
-                             default="voted"
                              )
     parser_test.add_argument('-f', '--filepath',
                              help='Training file to use to predict the input.',
