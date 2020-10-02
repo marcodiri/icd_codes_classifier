@@ -40,7 +40,7 @@ class Trainer:
 
         return vectors_dict
 
-    def save_mismatch_vectors(self):
+    def save_mismatch_vectors(self, strings):
         if os.path.exists(self.mv_dir+'mismatch_vectors_{}_{}.pk'
                 .format(self.args.k, self.args.m)):
             print("Mismatch_vectors file found, proceeding to next stage")
@@ -62,7 +62,7 @@ class Trainer:
                 chunks = [pool.apply_async(func=self._chunk_mismatch_vectors,
                                            args=(pid, chk)
                                            )
-                          for pid, chk in enumerate(chunk(TRAINING_LIST, processes))
+                          for pid, chk in enumerate(chunk(strings, processes))
                           ]
 
                 # merge chunks in one dict
@@ -70,7 +70,7 @@ class Trainer:
                     vectors_dict.update(k.get())
 
         else:
-            vectors_dict = self._chunk_mismatch_vectors(0, TRAINING_LIST)
+            vectors_dict = self._chunk_mismatch_vectors(0, strings)
 
         # add the empty label to initialize the training with a zeros vector
         # which translates to an empty dictionary in DOK format
@@ -113,17 +113,17 @@ def train(args):
     if args.k <= args.m:
         raise RuntimeError("Length k of subsequences must be greater than the number of mismatches m")
 
-    matrix, labels = compute_matrix(f'fold{args.fold_number}_training', args)
+    matrix, labels = compute_matrix(f'{args.name}_training', args)
     print("training...")
     start = default_timer()
-    clf = svm.LinearSVC(dual=False, C=args.c)
+    clf = svm.LinearSVC(dual=False, C=args.C)
     clf.fit(matrix, labels)
     end = default_timer()
     msg = f"Finished training in {end-start} seconds"
     print(msg)
     LOGGER.info(msg)
     print("Saving classifier...")
-    with open(args.savedir+f'fold{args.fold_number}_classifier.pk', 'wb') as cf:
+    with open(args.savedir+args.classifier_name, 'wb') as cf:
         pickle.dump(clf, cf)
 
 
@@ -159,53 +159,42 @@ def compute_matrix(name, args):
     return matrix, labels
 
 
-def cross_validate(args):
-    msg = f"LinearSVC - C={args.c}"
+def _cross_validate(args):
+    global trainer
+
+    import numpy as np
+
+    msg = f"LinearSVC - C={args.C}"
     print(msg)
     LOGGER.info(msg)
-    from configs import POSSIBLE_LABELS, TRAINING_LIST, LABELS
-    global trainer
-    # k-fold cross-validation
-    from sklearn.model_selection import KFold
-    import numpy as np
-    # data sample
-    data = np.array(examples)
-    # prepare cross validation
-    args.splits = 4
-    args.shuffle = True
-    args.seed = 1
-    args.savedir = TRAINING_SAVE_DIR + f"{args.splits}-fold_C{args.c}_results/"
+
+    POSSIBLE_LABELS = set()
+    TRAINING_LIST = []
+    LABELS = []
+
+    # change this to match the format of your dataset making sure
+    # to put strings in the TRAINING_LIST list,
+    # corresponding labels in the LABELS list in the same order
+    # and in POSSIBLE_LABELS a set of every labels
+    with open(args.training_file, 'rb') as examples_file:
+        examples = pickle.load(examples_file)
+        for _, __ in examples:
+            TRAINING_LIST.append(_.lower())  # examples are not distinguished by case sensitivity
+            LABELS.append(__)
+            POSSIBLE_LABELS.add(__)
+
+    args.savedir = TRAINING_SAVE_DIR + f"C{args.C}_results/"
     touch_dir(args.savedir)
-    kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
-    LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
-    print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
 
-    trainer = Trainer(args)
-    trainer.save_mismatch_vectors()
+    def test(classifier, test_set):
+        args.examples = test_set
+        matrix, real_labels = compute_matrix(f'{args.name}_predict', args)
 
-    # enumerate splits
-    for n, (train_indexes, test_indexes) in enumerate(kfold.split(TRAINING_LIST, LABELS)):
-        args.fold_number = n
-        args.examples = data[train_indexes]
-
-        if not os.path.exists(args.savedir+f'fold{args.fold_number}_classifier.pk'):
-            LOGGER.info(f"Beginning training for fold {n}")
-            print(f"Beginning training for fold {n}")
-            train(args)
-        else:
-            LOGGER.info(f"Model found for fold {n}, skipping training...")
-            print(f"Model found for fold {n}, skipping training...")
-
-        with open(args.savedir+f'fold{args.fold_number}_classifier.pk', 'rb') as sf:
-            clf = pickle.load(sf)
-
-        args.examples = data[test_indexes]
-        matrix, real_labels = compute_matrix(f'fold{args.fold_number}_predict', args)
-
-        LOGGER.info(f"Beginning predictions for fold {n}")
-        print(f"Beginning predictions for fold {n}")
+        msg = f"Beginning predictions for {args.name}"
+        LOGGER.info(msg)
+        print(msg)
         start = default_timer()
-        predictions = list(zip(clf.predict(matrix), real_labels))
+        predictions = list(zip(classifier.predict(matrix), real_labels))
         end = default_timer()
         msg = f"Finished predicting in {end-start} seconds"
         print(msg)
@@ -222,19 +211,91 @@ def cross_validate(args):
                 mistaken += 1
 
         from sklearn import metrics
+        possible_labels = list(POSSIBLE_LABELS)
         result = {
-            "confusion_matrix": metrics.confusion_matrix(y_true, y_pred, labels=POSSIBLE_LABELS),
-            "labels": POSSIBLE_LABELS,
+            "confusion_matrix": metrics.confusion_matrix(y_true, y_pred, labels=possible_labels),
+            "labels": possible_labels,
             "y_pred": y_pred,
             "y_true": y_true
         }
         accuracy = metrics.accuracy_score(y_true, y_pred)*100
-        with open(args.savedir+f"linear_fold{n}_accuracy{round(accuracy)}.pk", "wb") as res_f:
+        with open(args.savedir+f"linear_C{args.C}_{args.name}_accuracy{round(accuracy)}.pk", "wb") as res_f:
             pickle.dump(result, res_f)
-        info = f"Linear prediction - Fold {n}: correct: {correct}, mistaken: {mistaken}, " \
+        info = f"Linear prediction - {args.name}: correct: {correct}, mistaken: {mistaken}, " \
                f"accuracy: {accuracy}\n"
         print(info)
         LOGGER.info(info)
+
+    trainer = Trainer(args)
+    if args.test_file == '':
+        # do not change this
+        TRAINING_LIST = np.array(TRAINING_LIST)
+        LABELS = np.array(LABELS)
+        trainer.save_mismatch_vectors(TRAINING_LIST)
+        # k-fold cross-validation
+        # data sample
+        data = np.array(examples)
+        # prepare cross validation
+        args.splits = 4
+        args.shuffle = True
+        args.seed = 1
+        kfold = StratifiedKFold(n_splits=args.splits, shuffle=args.shuffle, random_state=args.seed)
+        LOGGER.info(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
+        print(f"Starting {args.splits}-fold cross validation with shuffle {args.shuffle} and seed {args.seed}")
+
+        # enumerate splits
+        for n, (train_indexes, test_indexes) in enumerate(kfold.split(TRAINING_LIST, LABELS)):
+            args.fold_number = n
+            args.name = f'fold{args.fold_number}'
+            args.examples = data[train_indexes]
+
+            args.classifier_name = f'C{args.C}_fold{args.fold_number}_classifier.pk'
+            if not os.path.exists(args.savedir+args.classifier_name):
+                LOGGER.info(f"Beginning training for fold {n}")
+                print(f"Beginning training for fold {n}")
+                train(args)
+            else:
+                LOGGER.info(f"Model found for fold {n}, skipping training...")
+                print(f"Model found for fold {n}, skipping training...")
+
+            with open(args.savedir + args.classifier_name, 'rb') as sf:
+                clf = pickle.load(sf)
+            test(clf, data[test_indexes])
+    else:
+        # train  and test
+
+        # calculate mismatch vectors for both training and test set
+        with open(args.test_file, 'rb') as sf:
+            test_filename = sf.name.split('/')[-1][:-3]
+            test_data = pickle.load(sf)
+            for _, __ in test_data:
+                TRAINING_LIST.append(_.lower())  # examples are not distinguished by case sensitivity
+        trainer.save_mismatch_vectors(TRAINING_LIST)
+
+        filename = args.training_file.split('/')[-1][:-3]
+        args.name = filename
+        args.examples = examples
+        args.classifier_name = f'C{args.C}_{args.name}_classifier.pk'
+        if not os.path.exists(args.savedir+args.classifier_name):
+            msg = f"Beginning training for {filename}"
+            LOGGER.info(msg)
+            print(msg)
+            train(args)
+        else:
+            msg = f"Model found for {filename}, skipping training..."
+            LOGGER.info(msg)
+            print(msg)
+
+        with open(args.savedir + args.classifier_name, 'rb') as sf:
+            clf = pickle.load(sf)
+        args.name = test_filename
+        test(clf, test_data)
+
+
+def cross_validate(args):
+    for _ in args.c:
+        args.C = _
+        _cross_validate(args)
 
 
 def main():
@@ -251,11 +312,21 @@ def main():
     subparsers = parser.add_subparsers(help='sub-command help')
 
     # Create the parser for the train command.
-    parser_train = subparsers.add_parser('train',
+    parser_train = subparsers.add_parser('crossval',
                                          help='Create and train a MulticlassClassifier')
+    parser_train.add_argument('-trf', '--training_file',
+                              help='dataset to train the classifier on.',
+                              type=str)
+    parser_train.add_argument('-tef', '--test_file',
+                              help='dataset to test the classifier on. If empty do a n-fold '
+                                   'cross validation on training file.',
+                              type=str,
+                              default='')
     parser_train.add_argument('-c',
-                              help='regularization parameter.',
+                              help='list of regularization parameters.'
+                                   'A training and test will be done for each element in the list',
                               type=float,
+                              nargs='+',
                               metavar='{0.1, 0.2, ..., 10}',
                               default=1)
     parser_train.add_argument('-k',
